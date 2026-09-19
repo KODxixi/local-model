@@ -1,0 +1,77 @@
+# local-rag 知识库注册表 — 唯一真相源 (single source of truth)
+# 新增知识库 = 加一段配置，不改代码。
+# MCP (local-models) 和 Skill (local-model) 都读这个文件。
+# 旧的 kbs.yaml 已 deprecated，仅作向后兼容 fallback。
+#
+# 本机私有库不要写在这里：新建同目录下的 registry.local.yaml（已在 .gitignore 中），
+# load_registry() 会自动把它的 knowledge_bases 合并/覆盖到本文件之上。
+# 这样本文件可以随仓库公开，你的私有路径不会进 git。
+
+version: 3
+
+# 文本后端（llama-swap 统一入口）
+text_backend:
+  base_url: http://127.0.0.1:9123
+  embedding:
+    base_url: http://127.0.0.1:9123
+    model: text-embedding-qwen3-embedding-8b
+    dimensions: 4096
+  rerank:
+    base_url: http://127.0.0.1:9123
+    model: text-reranker-8b
+
+# 视觉/对话后端（用于图片理解 / PDF 扫描页 / 查询改写 / 摘要）
+# 通过环境变量配置，不写死本机路径：
+#   LOCAL_RAG_VLM_BASE_URL / LOCAL_RAG_VLM_MODEL  (ingest.py VLM)
+#   LOCAL_RAG_LLM_BASE / LOCAL_RAG_LLM_MODEL       (rag_enhance.py 对话)
+# 默认走 http://127.0.0.1:8080 (Muse Glimmer 30B + Vision)
+
+# 向量存储
+vector_store:
+  type: lancedb
+  path: ~/.local-rag/lancedb
+
+# 性能配置：rag_indexer 与 rag_retriever 共用
+performance:
+  embed_batch_size: 64       # 文本 embedding 批大小（实测 64 是甜点 35 docs/s）
+  image_batch_size: 64       # 图片 embedding 批大小
+  rerank_recall_size: 24     # rerank 候选数（24 篇 × 0.36s ≈ 9s）
+  warmup_on_index: true      # 索引前发送小请求触发 Vulkan shader 编译
+
+# 旧 SQLite 索引路径（迁移用，新索引用 LanceDB）
+legacy_sqlite_path: ~/.claude/mcp/local-models/index.sqlite3
+
+# 知识库列表
+# 开箱是空的：把下面任意一段取消注释、root 改成你自己的目录即可用。
+# 私有路径建议写进 registry.local.yaml（不进 git），本文件保持可公开。
+knowledge_bases:
+  # 示例：文本库（markdown / 文档 / 表格都走这一个类型）
+  # my_docs:
+  #   type: text
+  #   root: ~/Documents/my-kb
+  #   patterns: ["*.md", "*.txt", "*.pdf", "*.docx", "*.xlsx", "*.pptx"]
+  #   dimensions: 4096
+  #   embed_model: text-embedding-qwen3-embedding-8b
+  #   max_file_bytes: 5000000
+  #   max_files: 10000
+  #   capability:
+  #     good_for: [文档全文检索, 笔记与资料语义检索, 报告内容搜索]
+  #     not_for: [精确数字/事实查询, 图片检索]
+  #     example_queries: [某份报告里的结论, 哪里讨论过某个方案]
+
+  # 图文库示例（需要自己的 LanceDB 索引与 VL 模型；不用就整段注释掉）
+  # my_image_lib:
+  #   type: multimodal
+  #   root: ~/Pictures/cases
+  #   endpoint: http://127.0.0.1:9123
+  #   dimensions: 2048
+  #   embed_model: vl-embedding-2b
+  #   reranker_model: vl-reranker-2b
+  #   project_root: ~/projects/my-image-lib       # subprocess fallback 所需
+  #   python: ~/projects/my-image-lib/.venv/bin/python
+  #   cli_module: my_image_lib                    # `python -m <cli_module> retrieve ...`
+  #   retrieval_server: http://127.0.0.1:8765     # 可选常驻检索服务
+  #   capability:
+  #     good_for: [以图搜图, 文本搜图]
+  #     not_for: [文本长篇语义问答]
+  #   note: 图文库由外部 CLI 管理索引，local-rag 不重复建索引

@@ -1,0 +1,15 @@
+# 测试运行时生成的 LanceDB 数据（可再生，不提交）
+tests/fixtures/test-lancedb/
+tests/fixtures/test-pdf-lancedb/
+tests/fixtures/test-full-lancedb/
+
+# 本机私有知识库配置（真实路径，不进 git）
+registry.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

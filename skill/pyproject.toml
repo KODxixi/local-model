@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-rag"
+version = "1.0.0"
+description = "本地 RAG 系统：文件解析 → 智能分块 → 向量化 → LanceDB 索引 → 混合检索"
+readme = "SKILL.md"
+requires-python = ">=3.11"
+dependencies = [
+    "lancedb>=0.30.0",
+    "pyarrow>=14.0.0",
+    "PyYAML>=6.0",
+    "Pillow>=10.0.0",
+    "markitdown>=0.1.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.0.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
+    "PyMuPDF>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["tests/fixtures", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+ignore = [
+    "E501",  # line too long（由 formatter 控制）
+    "E402",  # module level import not at top（sys.path.insert 是有意的，确保本地脚本可互导）
+    "B008",  # function call in default argument（dataclass field 常用）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F811"]  # 测试文件允许模块级 import 后代码
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # 渐进式类型检查
+ignore_missing_imports = true
+exclude = ["tests/fixtures", "__pycache__"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "integration: requires external services (llama-swap / LM Studio / PyMuPDF)",
+    "slow: slow running tests (cold model load / full indexing)",
+]

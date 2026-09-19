@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 测试生成的 LanceDB 数据（可再生）
+skill/tests/fixtures/test-lancedb/
+skill/tests/fixtures/test-pdf-lancedb/
+skill/tests/fixtures/test-full-lancedb/
+
+# 本机私有知识库配置（真实路径，不进 git）
+skill/registry.local.yaml
+
+# 本地索引数据
+*.sqlite3
+*.lance/
+
+# 环境
+.env
+.venv/
+venv/
