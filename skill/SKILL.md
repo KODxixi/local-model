@@ -205,7 +205,7 @@ cli.py retrieve ──→ 混合召回 (语义+关键词) ──→ RRF ──�
 
 ## 显存与优先级（铁律，2026-09-20 立）
 
-RTX 5090 D 共 32.6 GB。实测：**30B 常驻约 22 GB**，两个 8B 检索模型（embedding +
+RTX 5090 D 共 32.6 GB。实测：**30B 在场时约 22 GB**，两个 8B 检索模型（embedding +
 reranker，Q4_K_M + KV）约 10 GB —— **同时在场必然超订**：
 实测占用 31.3 / 32.6 GB（96%），rerank 直接 `TimeoutError`（`DEFAULT_TIMEOUT=180s`
 × 5 次重试 ≈ 15 分钟），对上层就是"检索不可用"。

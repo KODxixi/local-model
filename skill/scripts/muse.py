@@ -166,7 +166,13 @@ def cmd_start(cfg: dict, yes: bool) -> int:
         "--port", str(port),
         "--host", "127.0.0.1",
     ]
-    for p in (Path(cmd[0]), Path(cmd[3]), Path(cmd[5]), Path(cmd[7])):
+    # 按路径构造检查，不数 cmd 下标（2026-09-20 修：下标法把 -m 这类 flag 当路径，报"缺少文件: -m"）
+    for p in (
+        Path(cmd[0]),
+        models / cfg["model"],
+        models / cfg["mmproj"],
+        models / cfg["draft_model"],
+    ):
         if not p.is_file():
             print(f"缺少文件: {p}")
             return 1

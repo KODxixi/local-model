@@ -159,16 +159,18 @@ Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全
 `tools/governance/verify-local-models.ps1` 目前只从 skill 层 `rag_client.DEFAULT_TIMEOUT`(180)
 与 mcp 层 `image_retrieval`(300) 取最小值，**覆盖不到这 15s**，改 ttl 时须手工核。
 
-**Muse Glimmer 30B 不在本表**：它由 8080 的 CUDA 常驻实例提供（无 TTL 卸载），
-llama-swap 里的那份重复登记已于 2026-09-20 移除（显存装不下两份）。
+**Muse Glimmer 30B 不在本表**：它由 8080 的 CUDA 实例提供，**手工启停、无 TTL**
+（2026-09-20 起走受管入口 `scripts/muse.py`）；llama-swap 里那份重复登记已于同日移除
+（显存装不下两份）。
 
 **`groups.*.persistent: true` 只防 swap 驱逐，不防空闲 TTL 卸载。** 组 persistent 而成员
-`ttl: 300` 时，5 分钟空闲后首次搜索仍要付 ~12.5s 冷加载。要抹平就把该模型也设 `ttl: 0`
-（代价：常驻显存）。
+`ttl: 300` 时，5 分钟空闲后首次搜索仍要付 ~12.5s 冷加载。
+（当时的取舍是"设成 `ttl: 0` 常驻抹平"——**2026-09-20 起口径改了**：一切本地模型按需调用、
+不常驻，见下节容量不变量；此处只作历史记录。）
 
 ### 容量不变量：30B 与检索模型不可同时驻留
 
-实测（RTX 5090 D，32.6 GB）：30B 常驻 ~22 GB + 两个 8B 检索模型 ~10 GB = **超订**。
+实测（RTX 5090 D，32.6 GB）：30B 在场时 ~22 GB + 两个 8B 检索模型 ~10 GB = **超订**。
 症状：显存 96%、rerank 请求 `TimeoutError`（`rag_client.DEFAULT_TIMEOUT=180s` × 5 次重试
 ≈ 15 分钟）→ 上层表现为"检索不可用"（⚠️ agent 记忆检索的 15s 硬上限必然先超时）。
 

@@ -69,8 +69,26 @@ flowchart TB
 
 **选型理由：**
 - 检索模型（embedding/rerank）走 llama-swap：Vulkan 版 llama.cpp，TTL 自动装卸，4个模型共享一套基础设施
-- 视觉/对话走 Muse Glimmer 8080：CUDA 13.3 + DFlash 投机解码，128K 上下文，125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR
+- 视觉/打标走 Muse Glimmer 8080：CUDA 13.3 + DFlash 投机解码，128K 上下文，125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR
 - 所有模型全层 GPU（`--gpu-layers 99`），不走 CPU
+
+**显存与优先级（铁律，2026-09-20）**：32.6 GB 装不下 30B（~22 GB）+ 两个 8B 检索模型
+（~10 GB）同时在场 —— 实测 96% 占用时 rerank 直接 `TimeoutError`。因此：**一切本地模型
+按需调用、不常驻**；**优先级：向量/检索模型 > 30B**；**30B 只在打标/批量视觉时按需起、
+用完停**；两者都要在场时不要自行调度，**通知用户**由其决定启停顺序。
+
+**30B 的受管启停入口**（用这个，别手敲命令）：
+
+```powershell
+<venv python> scripts/muse.py status   # 只读：进程/端口/显存/检索模型是否在场
+<venv python> scripts/muse.py start    # 起 30B；显存不足且检索模型在场时【拒绝】，除非 --yes
+<venv python> scripts/muse.py stop     # 停 30B，并报告释放多少显存
+```
+
+路径（llama-server / GGUF / 端口 / `min_free_gb`）写在 `registry.local.yaml` 的
+`muse_glimmer` 段（不进 git）。下面的 raw 启动命令仅供理解参数，日常请用上面的入口。
+
+实测：`stop` 释放 20.1 GB；`start` 冷加载 15.5s 就绪。
 
 ## 数据库 / 向量库
 
@@ -515,7 +533,7 @@ results = rerank_texts("query", ["doc1", "doc2"], top_k=5)
 - **llama-swap 9123**：Vulkan llama.cpp，`-ngl 99`（全层），4个检索模型，TTL 300s 自动卸载
 - **Muse Glimmer 8080**：CUDA 13.3 + DFlash 投机解码 + Vision，128K 上下文，125-220 tok/s，视觉理解 + 对话生成
 
-### Muse Glimmer 30B + DFlash（对话/Agent 主模型）
+### Muse Glimmer 30B + DFlash（视觉/打标主模型，按需启停）
 
 **最优配置（已验证，RTX 5090 D 32GB）：**
 
