@@ -147,10 +147,20 @@ Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全
 
 | 模型 | `ttl` | 冷加载实测 | 热态 |
 |---|---|---|---|
-| `text-embedding-qwen3-embedding-8b` | 0（+ 启动预载常驻） | 不适用 | 0.28s |
+| `text-embedding-qwen3-embedding-8b` | 300 | **4.29s**（2026-09-20 实测两次 4.285/4.29） | 0.018s（2026-09-20） |
 | `text-reranker-8b` | 300 | **12.48s**（历史最坏 24.27s） | 1.03–1.13s |
 | `vl-reranker-2b` | 300 | **16.27s** | — |
 | `vl-embedding-2b` | 300 | **12.31s** | 0.02s |
+
+**最小的调用方 timeout 是 agent 记忆检索的 15s，硬编码不可配**
+（`DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15e3`，本机定位方法见
+`tools/governance/verify-local-models.ps1` 的注释）。比对冷加载时要拿它当上界，
+而不是拿 skill/MCP 的 180s——
+`tools/governance/verify-local-models.ps1` 目前只从 skill 层 `rag_client.DEFAULT_TIMEOUT`(180)
+与 mcp 层 `image_retrieval`(300) 取最小值，**覆盖不到这 15s**，改 ttl 时须手工核。
+
+**Muse Glimmer 30B 不在本表**：它由 8080 的 CUDA 常驻实例提供（无 TTL 卸载），
+llama-swap 里的那份重复登记已于 2026-09-20 移除（显存装不下两份）。
 
 **`groups.*.persistent: true` 只防 swap 驱逐，不防空闲 TTL 卸载。** 组 persistent 而成员
 `ttl: 300` 时，5 分钟空闲后首次搜索仍要付 ~12.5s 冷加载。要抹平就把该模型也设 `ttl: 0`
