@@ -36,6 +36,7 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | 操作 | 命令 |
 |------|------|
 | 诊断系统状态 | `cli.py doctor`（不需要 `--kb`） |
+| 起/停 30B（受管） | `<venv python> scripts/muse.py start\|stop\|status`（私有路径在 registry.local.yaml） |
 | 建索引（增量） | `cli.py --kb <name> index` |
 | 全量重建 | `cli.py --kb <name> index --force` |
 | 文本检索（默认 hybrid+智能权重） | `cli.py --kb <name> retrieve "<query>"` |

@@ -217,8 +217,19 @@ reranker，Q4_K_M + KV）约 10 GB —— **同时在场必然超订**：
 4. **遇到"两个都要在场"的显存冲突**：不要自行调度、不要降级硬跑 ——
    **立即通知用户**（说明谁在占显存、要起什么、预计占用），由用户决定启停顺序。
 
-30B 启动命令见本文末「Muse Glimmer 30B + DFlash + Vision」一节；
-停止 = 结束该 llama-server 进程（无对应计划任务）。
+### 受管启停入口（用这个，不要手敲命令）
+
+```bash
+<venv python> scripts/muse.py status   # 只读：进程 / 端口 / 显存 / 检索模型是否在场
+<venv python> scripts/muse.py start    # 起 30B；显存不足且检索模型在场时【拒绝】，除非 --yes
+<venv python> scripts/muse.py stop     # 停 30B，并报告释放了多少显存
+```
+
+- 私有路径（llama-server / GGUF / 端口 / `min_free_gb`）写在 `registry.local.yaml` 的
+  `muse_glimmer` 段，不进 git；公开仓库只有代码与字段说明。
+- `start` 的拒绝逻辑就是上面第 4 条的落地：它先看 `nvidia-smi` 空闲显存与 9123 的
+  `/running`，不满足就**停下来让人决定**，而不是硬起。
+- raw 启动命令仍保留在本文末「Muse Glimmer 30B + DFlash + Vision」一节，仅作参考。
 
 ## 安全与边界
 
