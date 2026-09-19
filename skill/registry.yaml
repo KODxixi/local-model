@@ -38,8 +38,8 @@ performance:
   rerank_recall_size: 24     # rerank 候选数（24 篇 × 0.36s ≈ 9s）
   warmup_on_index: true      # 索引前发送小请求触发 Vulkan shader 编译
 
-# 旧 SQLite 索引路径（迁移用，新索引用 LanceDB）
-legacy_sqlite_path: ~/.claude/mcp/local-models/index.sqlite3
+# 旧 SQLite 索引已于 2026-09-20 删除（LanceDB 迁移早已完成，无代码读此路径）。
+# `cli.py migrate --sqlite <path>` 仍需显式传路径，故不再保留默认键。
 
 # 知识库列表
 # 开箱是空的：把下面任意一段取消注释、root 改成你自己的目录即可用。
