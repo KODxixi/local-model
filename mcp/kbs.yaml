@@ -25,7 +25,7 @@ knowledge_bases:
   my_docs:
     type: text
     root: ~/Documents/my-kb
-    patterns: ["*.md", "*.txt", "*.py", "*.yaml", "*.yml", "*.json"]
+    patterns: ["*.md", "*.txt", "*.py", "*.yaml", "*.yml"]  # 不含 *.json：结构化事实不进语义索引（2026-09-19）
     max_files: 3000
     capability:
       good_for: [文档全文检索, 笔记检索]
