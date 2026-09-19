@@ -231,6 +231,22 @@ reranker，Q4_K_M + KV）约 10 GB —— **同时在场必然超订**：
   `/running`，不满足就**停下来让人决定**，而不是硬起。
 - raw 启动命令仍保留在本文末「Muse Glimmer 30B + DFlash + Vision」一节，仅作参考。
 
+### 性能取向：要跑就跑满（不常驻，但一旦跑就最快）
+
+「按需调用」与「GPU 拉满」**不冲突**——冲突只发生在**多个模型同时在场**时 ✗。
+单模型在场时就该吃满 GPU：
+
+- **全层 GPU**：`-ngl 99` / `--gpu-layers 99`；回落 CPU 会慢一个数量级 ✗
+- **投机解码 + Flash Attention**：Muse Glimmer 用 DFlash（`--spec-type draft-dflash`
+  + `--spec-draft-n-max 10` + `-fa on`）→ 125–220 tok/s
+- **批处理用实测甜点**：`embed_batch_size=64`、`image_batch_size=64`；llama-server
+  并发 `--parallel 8`（**8 是稳定极限**，>8 触发多 slot bug 的 HTTP 400 ✗）
+- **上下文按场景取，不盲目拉满**：打标 32768 / 对话 131072（KV cache 吃显存 ✗，
+  拉满会把别的模型挤出去）
+- **冷加载的代价用「预热」补，不用「常驻」补**：批量任务开始前先打一个请求把模型
+  拉起来（索引流程已内置 `warmup_on_index: true` ✓），而不是让它一直驻留 ✗
+- 参数明细见本文末「Muse Glimmer 30B + DFlash + Vision」与 README 的批量打标参数表
+
 ## 安全与边界
 
 - 索引是**可再生投影**，真相源是原始文件；永不反向写
