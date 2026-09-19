@@ -4,6 +4,7 @@
 # 核心
 lancedb>=0.30.0
 pyarrow>=14.0.0
+pandas>=2.0.0  # LanceDB to_pandas() 需要；lancedb 未声明此依赖，缺失会静默返回空结果
 PyYAML>=6.0
 Pillow>=10.0.0
 
