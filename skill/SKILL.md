@@ -3,7 +3,7 @@ name: local-model
 description: |
   本地 RAG 系统统一入口：文件解析（PDF/Word/Excel/PPT/图片）、智能分块、向量化索引、混合检索+重排。
   当需要解析杂乱文件、构建知识库、语义检索、召回相关文档时使用。
-  检索模型走 llama-swap 9123，视觉/对话主模型走 Muse Glimmer 8080 (CUDA + DFlash + Vision)，向量存储用 LanceDB。
+  检索模型走 llama-swap 9123，视觉/打标主模型走 Muse Glimmer 8080 (CUDA + DFlash + Vision)，向量存储用 LanceDB。
   不用于网页搜索、远程模型调用或未经确认的共享服务管理。
 ---
 

@@ -114,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | 文本表4096维 + 图片表2048维分离 | 不同模型维度不同，混在一张表会导致维度冲突 |
 | PDF 入库用 PyMuPDF+WebP+HTML重组 | 文本层优先（快），WebP缓存（增量），HTML重组（保留布局） |
 | 不用 PaddleOCR | 对话/视觉主模型一次完成 OCR+描述+分类，不需要单独的 OCR 引擎 |
-| llama-swap Vulkan + 另一路 CUDA | 检索模型用 Vulkan llama.cpp（TTL装卸，4模型共享），视觉/对话用 CUDA + DFlash（性能最优） |
+| llama-swap Vulkan + 另一路 CUDA | 检索模型用 Vulkan llama.cpp（TTL装卸，4模型共享），视觉/打标用 CUDA + DFlash（性能最优） |
 | rag_client 零第三方依赖 | 外部项目可直接 import，不会因 lancedb 缺失而失败 |
 | MCP 纯薄入口层 | 消除双轨制，MCP 只做 stdio 协议适配，全部业务逻辑在 Skill 层 |
 | **RRF 混合召回** | 语义/关键词分别排名后用 Reciprocal Rank Fusion 融合，避免不同含义的原始分数直接混合 |
@@ -138,9 +138,9 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | vl-embedding-2b | 图向量 | 2048 | 检索端点（llama-swap 9123） |
 | text-reranker-8b | 文本精排 | - | 检索端点（llama-swap 9123） |
 | vl-reranker-2b | 图文精排 | - | 检索端点（llama-swap 9123） |
-| **Muse Glimmer 30B + DFlash + Vision** | **对话/Agent/视觉主模型** | - | **8080 (CUDA + DFlash)** |
+| **Muse Glimmer 30B + DFlash + Vision** | **视觉/打标主模型（按需起，非常驻）** | - | **8080 (CUDA + DFlash)** |
 
-**Muse Glimmer 30B（对话/Agent/视觉主模型）：**
+**Muse Glimmer 30B（视觉/打标主模型）：**
 - 上下文：131,072 tokens（128K 原生；批量打标场景用 32768）
 - 生成速度：125-220 tok/s（DFlash 投机解码）
 - GPU：22-30 GB / 32.6 GB
