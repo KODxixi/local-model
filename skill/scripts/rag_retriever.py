@@ -163,6 +163,7 @@ class RetrievalResult:
     chunk_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     ranked_by: str = "rerank"  # rerank / embedding / keyword
+    explain: dict[str, Any] = field(default_factory=dict)  # 思维链：为什么命中这个片段
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +176,7 @@ class RetrievalResult:
             "chunk_id": self.chunk_id,
             "metadata": self.metadata,
             "ranked_by": self.ranked_by,
+            "explain": self.explain,
         }
 
     def format_for_agent(self, index: int) -> str:
@@ -231,14 +233,8 @@ class RAGRetriever:
         use_rerank: bool = True,
         use_query_rewrite: bool = False,
         recall_size: int | None = None,
-        use_mmr: bool = False,
-        mmr_lambda: float = DEFAULT_MMR_LAMBDA,
-        parent_child: bool = False,
-        parent_expand_chars: int = DEFAULT_PARENT_EXPAND_CHARS,
         auto_route: bool = False,
         smart_weights: bool = True,
-        expand_query: bool = False,
-        num_expansions: int = 2,
         context: str = "",
         use_query_instruction: bool | None = None,  # None=用 self 默认, True/False=覆盖
         trace: bool = False,
@@ -296,11 +292,6 @@ class RAGRetriever:
         if recall_size is None:
             recall_size = int(self.perf_config.get("rerank_recall_size", DEFAULT_RERANK_RECALL_SIZE))
 
-        # P3-3: 查询路由 —— 仅当用户未显式指定模式（默认 hybrid）时自动决策。
-        routed_mode: str | None = None
-        if auto_route and mode == "hybrid":
-            routed_mode = self._route_query(query)
-            mode = routed_mode
 
         # P4-3: 多轮上下文消歧（规则-based，零延迟）
         disambiguated = False
@@ -580,56 +571,7 @@ class RAGRetriever:
     # ------------------------------------------------------------------
     # P3-2: Parent-Child 父文档上下文扩展
     # ------------------------------------------------------------------
-    def _expand_to_parent(
-        self,
-        results: list[RetrievalResult],
-        expand_chars: int = 500,
-    ) -> list[RetrievalResult]:
-        """把命中 chunk 扩展为父文档上下文（前/后各 expand_chars 字符）。
 
-        用 chunk 文本前 120 字符在原始文件中定位；文件不存在或定位失败时
-        静默跳过，保留原 chunk。
-        """
-        expanded: list[RetrievalResult] = []
-        for r in results:
-            try:
-                fpath = Path(r.path).expanduser()
-                if not fpath.is_absolute():
-                    # 相对路径：尝试相对当前工作目录
-                    fpath = (Path.cwd() / r.path).resolve()
-                if not fpath.exists() or not fpath.is_file():
-                    expanded.append(r)
-                    continue
-                content = fpath.read_text(encoding="utf-8", errors="replace")
-                anchor = r.text[:PARENT_ANCHOR_CHARS].strip()
-                pos = content.find(anchor) if anchor else -1
-                if pos < 0:
-                    expanded.append(r)
-                    continue
-                chunk_end = pos + len(r.text)
-                start = max(0, pos - expand_chars)
-                end = min(len(content), chunk_end + expand_chars)
-                ctx_before = content[start:pos].strip()
-                hit = content[pos:chunk_end]
-                ctx_after = content[chunk_end:end].strip()
-                parts: list[str] = []
-                if ctx_before:
-                    parts.append(f"[上下文前] {ctx_before}")
-                parts.append(f"[命中] {hit}")
-                if ctx_after:
-                    parts.append(f"[上下文后] {ctx_after}")
-                r.text = "\n".join(parts)
-                r.metadata["expanded"] = True
-                r.metadata["expand_chars"] = expand_chars
-            except OSError as exc:
-                print(f"[rag_retriever] parent-child 读取失败 {r.path}: {exc}",
-                      file=sys.stderr)
-            expanded.append(r)
-        return expanded
-
-    # ------------------------------------------------------------------
-    # P3-3: 查询路由
-    # ------------------------------------------------------------------
     def _route_query(self, query: str) -> str:
         """根据查询类型启发式选择检索模式（无需 LLM）。
 
@@ -823,65 +765,6 @@ class RAGRetriever:
             r["_source"] = "semantic"
         return results
 
-    def _multi_query_retrieve(
-        self,
-        queries: list[str],
-        *,
-        top_k: int,
-        mode: str,
-        path_filter: str | None,
-        doc_type_filter: str | None,
-        use_rerank: bool,
-        recall_size: int,
-        smart_weights: bool = True,
-    ) -> list[RetrievalResult]:
-        """多查询检索：RRF 融合召回 → 稳定去重 → 截断 → 统一 rerank。
-
-        P0 修复（codex 审查）：
-        - hybrid 模式走 _hybrid_recall（RRF），不再分别调语义/关键词
-        - 去重用 _dedup_key（完整内容哈希），避免前80字相同的片段被合并
-        - 重排前截断到 recall_size，避免 3 查询 × 2 路 × 24 条 = 144+ 条全送 reranker
-        - smart_weights 从调用者传入，不写死 True（原开启改写后变成 0.2/0.8，与普通查询不一致）
-        """
-        merged: dict[str, dict[str, Any]] = {}
-
-        def _sort_key(r: dict[str, Any]) -> float:
-            return float(r.get("_sort_score", r.get("score", 0)))
-
-        for q in queries[:MAX_MULTI_QUERIES]:
-            if mode == "hybrid":
-                candidates = self._hybrid_recall(q, recall_size, path_filter, doc_type_filter, smart_weights=smart_weights)
-            elif mode == "semantic":
-                candidates = self._semantic_recall(q, recall_size, path_filter, doc_type_filter)
-            else:  # keyword
-                candidates = self._keyword_recall(q, recall_size, path_filter)
-                for r in candidates:
-                    r["_source"] = "keyword"
-            for r in candidates:
-                key = _dedup_key(r)
-                old = merged.get(key)
-                if old is None or _sort_key(r) > _sort_key(old):
-                    merged[key] = r
-
-        all_candidates = list(merged.values())
-        if not all_candidates:
-            return []
-
-        # 重排前截断：按 RRF/召回分排序后取 recall_size 条
-        if len(all_candidates) > recall_size:
-            all_candidates = sorted(all_candidates, key=_sort_key, reverse=True)[:recall_size]
-
-        # rerank（用第一个查询做精排）
-        if use_rerank and mode != "keyword":
-            results = self._rerank(queries[0], all_candidates, top_k)
-        else:
-            results = sorted(all_candidates, key=_sort_key, reverse=True)[:top_k]
-            for r in results:
-                r["ranked_by"] = "embedding" if r.get("_source") != "keyword" else "keyword"
-                if "_sort_score" in r:
-                    r.setdefault("metadata", {})["rrf_score"] = float(r["_sort_score"])
-
-        return [self._to_result(r) for r in results]
 
     def _keyword_recall(
         self,
@@ -955,6 +838,19 @@ class RAGRetriever:
         # P4-1: 把加权混合召回的权重写入 metadata（若候选带了标记）
         if "_hybrid_weights" in r:
             meta.setdefault("hybrid_weights", r["_hybrid_weights"])
+
+        # 思维链：为什么命中这个片段
+        explain = {
+            "source": r.get("_source", "unknown"),  # semantic / keyword / hybrid
+            "ranked_by": r.get("ranked_by", "embedding"),
+            "semantic_score": r.get("_rrf_sem", None),
+            "keyword_score": r.get("_rrf_keyword", None),
+            "rrf_score": r.get("_sort_score", None),
+            "rerank_score": float(r.get("score", 0)) if r.get("ranked_by") == "rerank" else None,
+        }
+        # 去掉 None 值
+        explain = {k: v for k, v in explain.items() if v is not None}
+
         return RetrievalResult(
             text=r.get("text", ""),
             path=r.get("path", ""),
@@ -965,6 +861,7 @@ class RAGRetriever:
             chunk_id=r.get("chunk_id", ""),
             metadata=meta,
             ranked_by=r.get("ranked_by", "embedding"),
+            explain=explain,
         )
 
     def format_results(self, results: list[RetrievalResult]) -> str:

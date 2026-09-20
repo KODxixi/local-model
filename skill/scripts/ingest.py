@@ -34,6 +34,44 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
+# Prompt 加载（从 system/*.md 读取，不硬编码）
+# ---------------------------------------------------------------------------
+
+SCRIPTS_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SCRIPTS_DIR.parent
+SYSTEM_DIR = SKILL_ROOT / "system"
+
+
+def load_prompt(name: str) -> tuple[str, str]:
+    """从 system/*.md 加载 prompt，返回 (system, user)。
+
+    文件格式：
+    ## system
+    system prompt 内容
+
+    ## user
+    user prompt 内容
+    """
+    prompt_file = SYSTEM_DIR / f"{name}.md"
+    if not prompt_file.exists():
+        return "", ""
+
+    content = prompt_file.read_text(encoding="utf-8")
+    parts = content.split("## user", 1)
+    system_part = parts[0].replace("## system", "").strip()
+    user_part = parts[1].strip() if len(parts) > 1 else ""
+
+    # 去掉 markdown 标题行
+    system_lines = []
+    for line in system_part.splitlines():
+        if line.startswith("#"):
+            continue
+        system_lines.append(line)
+
+    return "\n".join(system_lines).strip(), user_part
+
+
+# ---------------------------------------------------------------------------
 # 数据结构
 # ---------------------------------------------------------------------------
 
@@ -113,11 +151,8 @@ PDF_WEBP_QUALITY = 85
 PDF_MAX_EDGE = 2400
 WEBP_ENCODE_METHOD = 6        # Pillow WebP method=6 最慢但压缩率最好
 
-# PDF 页面 VLM 增强提示词
-PDF_VLM_PROMPT = (
-    "这是一份PDF文档的某一页。请：1) 提取页面中所有文字（OCR）；"
-    "2) 简要描述页面内容（图表/图片/布局）。用中文回答，先文字后描述。"
-)
+# PDF 页面 VLM 增强提示词（从 system/pdf-vlm-prompt.md 加载）
+_, PDF_VLM_PROMPT = load_prompt("pdf-vlm")
 #: PDF 元数据中不保留的字段（格式信息与加密标记，对检索无价值）
 PDF_META_SKIP_KEYS = ("format", "encryption")
 

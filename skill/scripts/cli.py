@@ -1,7 +1,7 @@
 ﻿"""local-rag 统一 CLI 入口。
 
 agent 只需调用这一个脚本，通过子命令访问所有功能：
-  index / freshness / stats / retrieve / search-image / kg / ingest / chunk /
+  index / freshness / stats / retrieve / search-image / ingest / chunk /
   rewrite / summary / embed / rerank / migrate / optimize / doctor
 
 设计原则：
@@ -59,7 +59,7 @@ DEFAULT_DB = "~/.local-rag/lancedb"
 
 # 必须显式指定 --kb 的子命令（其余子命令与知识库无关）
 _KB_REQUIRED_COMMANDS = frozenset(
-    {"index", "freshness", "stats", "retrieve", "search-image", "kg", "migrate", "optimize"}
+    {"index", "freshness", "stats", "retrieve", "search-image", }
 )
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 ensure_ascii=False, indent=2,
             ))
         else:
-            _print_results(all_results, False)
+            _print_results(all_results, False, show_explain=getattr(args, "explain", False))
             if skipped:
                 print(f"\n⚠️ 跳过 {len(skipped)} 个知识库：", file=sys.stderr)
                 for s in skipped:
@@ -334,7 +334,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         trace=bool(trace_output),
         trace_output=trace_output,
     )
-    _print_results(results, args.json)
+    _print_results(results, args.json, show_explain=getattr(args, "explain", False))
     if trace_output:
         print(f"\n📊 推理链已生成: {trace_output}", file=sys.stderr)
     return 0
@@ -379,85 +379,17 @@ def cmd_search_image(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_results(results: list[RetrievalResult], as_json: bool) -> None:
+def _print_results(results: list[RetrievalResult], as_json: bool, show_explain: bool = False) -> None:
     """统一输出检索结果。"""
     if as_json:
         print(json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2))
     else:
         for i, r in enumerate(results, 1):
             print(r.format_for_agent(i))
+            if show_explain and r.explain:
+                explain_str = "  🔍 " + " | ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in r.explain.items())
+                print(explain_str)
             print()
-
-
-def cmd_kg(args: argparse.Namespace) -> int:
-    """知识图谱子命令。"""
-    from knowledge_graph import KnowledgeGraph
-    kg = KnowledgeGraph(db_path=args.db, kb_name=args.kb)
-
-    result: Any = None
-    if args.kg_command == "extract":
-        from ingest import ingest
-        from knowledge_graph import extract_entities_llm, extract_entities_regex
-        doc = ingest(args.file)
-        # P0-1：KnowledgeGraph 无 extract_from_document，改为
-        # 模块级 extract_entities_llm/regex + kg.add_entities()
-        if args.no_llm:
-            entities = extract_entities_regex(doc.content)
-        else:
-            entities = extract_entities_llm(doc.content, title=doc.title)
-            if not entities:
-                entities = extract_entities_regex(doc.content)
-        mtime_ns = Path(args.file).stat().st_mtime_ns
-        added = kg.add_entities(entities, str(Path(args.file).resolve()), doc.content, mtime_ns)
-        result = {
-            "file": str(args.file),
-            "extracted": len(entities),
-            "added_to_graph": added,
-            "entities": [
-                {"name": e.name, "type": e.entity_type, "description": e.description}
-                for e in entities
-            ],
-        }
-    elif args.kg_command == "find":
-        result = kg.find_docs_by_entity(args.entity, top_k=args.top_k)
-    elif args.kg_command == "related":
-        result = kg.find_related_entities(args.entity, top_k=args.top_k)
-    elif args.kg_command == "list":
-        result = kg.list_entities(entity_type=args.type, top_k=args.top_k)
-    elif args.kg_command == "stats":
-        result = kg.stats()
-    elif args.kg_command == "visualize":
-        output_path = kg.visualize(args.output, top_k=args.top_k)
-        result = {"output": str(output_path), "kb": args.kb, "top_k": args.top_k}
-
-    if args.json:
-        _dump(result, True)
-    elif args.kg_command == "extract":
-        print(f"文件: {result['file']}")
-        print(f"提取实体 {result['extracted']} 个（入库 {result['added_to_graph']}）")
-        for e in result["entities"]:
-            print(f"  - [{e['type']}] {e['name']}: {e['description']}")
-    elif args.kg_command == "find":
-        print(f"提到实体 '{args.entity}' 的文档（{len(result)} 个）:")
-        for d in result:
-            print(f"  - {d['path']}（{d['entity_count']} 次）")
-    elif args.kg_command == "related":
-        print(f"与 '{args.entity}' 共现的实体（{len(result)} 个）:")
-        for e in result:
-            print(f"  - {e['entity_name']}（{e['cooccurrence_count']} 次）")
-    elif args.kg_command == "list":
-        print(f"实体列表（{len(result)} 个）:")
-        for e in result:
-            print(f"  - [{e.get('entity_type','')}] {e['entity_name']} "
-                  f"(occurrences={e.get('total_occurrences',0)}, docs={e.get('doc_count',0)})")
-    elif args.kg_command == "stats":
-        for k, v in result.items():
-            print(f"  {k}: {v}")
-    elif args.kg_command == "visualize":
-        print(f"知识图谱已生成: {result['output']}")
-        print(f"  知识库: {result['kb']}")
-        print(f"  实体数: top {result['top_k']}")
-    return 0
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
@@ -570,46 +502,6 @@ def cmd_rerank(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_migrate(args: argparse.Namespace) -> int:
-    """从 SQLite 迁移到 LanceDB。"""
-    from vector_store import migrate_from_sqlite
-    result = migrate_from_sqlite(
-        sqlite_path=args.sqlite,
-        lancedb_path=args.db,
-        kb_name=args.kb,
-        dimensions=args.dimensions,
-    )
-    if args.json:
-        _dump(result, True)
-    else:
-        for k, v in result.items():
-            print(f"  {k}: {v}")
-    return 0
-
-
-def cmd_optimize(args: argparse.Namespace) -> int:
-    """优化 LanceDB 表。"""
-    registry = load_registry(args.registry)
-    kb = registry.get(args.kb)
-    from rag_client import DEFAULT_TEXT_EMBED_MODEL
-    DEFAULT_DIM = 4096  # 未知 KB 时的兜底向量维度
-    dims = kb.dimensions if kb else DEFAULT_DIM
-    model = kb.embed_model if kb else DEFAULT_TEXT_EMBED_MODEL
-    backend = kb.vector_backend if kb else "lancedb"
-    store = create_vector_store(
-        backend=backend,
-        db_path=args.db,
-        kb_name=args.kb,
-        dimensions=dims,
-        model=model,
-    )
-    result = store.optimize()
-    if args.json:
-        _dump(result, True)
-    else:
-        for k, v in result.items():
-            print(f"  {k}: {v}")
-    return 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -918,28 +810,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="检索模式（默认 %(default)s）")
     p.add_argument("--no-rerank", action="store_true", help="跳过 rerank 精排（按召回分数排序）")
     p.add_argument("--path-filter", default=None, help="仅检索路径包含该子串的文档")
-    # P3 创新突破
-    p.add_argument("--mmr", action="store_true",
-                   help="P3: 启用 MMR 多样性重排（避免相邻 chunk 扎堆）")
-    p.add_argument("--mmr-lambda", type=float, default=0.5,
-                   help="P3: MMR 相关性-多样性平衡系数，1=纯相关，0=纯多样（默认 %(default)s）")
-    p.add_argument("--parent-child", action="store_true",
-                   help="P3: 把命中 chunk 扩展为父文档上下文")
-    p.add_argument("--expand-chars", type=int, default=500,
-                   help="P3: 父文档上下文扩展字符数，前/后各 N（默认 %(default)s）")
-    p.add_argument("--auto-route", action="store_true",
-                   help="P3: 按查询类型自动选择检索模式（覆盖 --mode）")
-    # P4 创新突破：智能权重 / 查询扩展 / 多轮上下文
-    p.add_argument("--expand", action="store_true",
-                   help="P4: 启用查询扩展（对话端点生成同义子查询，默认关闭，延迟 2-3x）")
-    p.add_argument("--num-expansions", type=int, default=2,
-                   help="P4: 查询扩展子查询数量（默认 %(default)s）")
-    p.add_argument("--context", default="",
-                   help="P4: 多轮对话上下文（用于消歧当前查询中的代词）")
-    p.add_argument("--no-smart-weights", action="store_true",
-                   help="P4: 禁用混合检索智能权重（默认启用）")
+
+
     p.add_argument("--trace", default=None, metavar="OUTPUT.html",
                    help="生成检索推理链可视化 HTML（查询→召回→融合→rerank→结果）")
+    p.add_argument("--explain", action="store_true",
+                   help="显示每个结果的详细评分（语义相似度/关键词匹配/RRF融合/rerank分数）")
     _add_json(p)
     p.set_defaults(func=cmd_retrieve)
 
@@ -950,33 +826,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json(p)
     p.set_defaults(func=cmd_search_image)
 
-    # kg (知识图谱)
-    p = sub.add_parser("kg", help="知识图谱操作")
-    kg_sub = p.add_subparsers(dest="kg_command", required=True)
-    p_ext = kg_sub.add_parser("extract", help="从文件提取实体")
-    p_ext.add_argument("file", help="源文件路径")
-    p_ext.add_argument("--no-llm", action="store_true", help="只用规则提取（不调用 LLM）")
-    _add_json(p_ext)
-    p_find = kg_sub.add_parser("find", help="找提到某实体的文档")
-    p_find.add_argument("entity", help="实体名")
-    p_find.add_argument("--top-k", type=int, default=10, help="返回文档数（默认 %(default)s）")
-    _add_json(p_find)
-    p_rel = kg_sub.add_parser("related", help="找与某实体共现的其他实体")
-    p_rel.add_argument("entity", help="实体名")
-    p_rel.add_argument("--top-k", type=int, default=10, help="返回实体数（默认 %(default)s）")
-    _add_json(p_rel)
-    p_list = kg_sub.add_parser("list", help="列出所有实体")
-    p_list.add_argument("--type", default=None, help="按实体类型过滤")
-    p_list.add_argument("--top-k", type=int, default=50, help="返回实体数（默认 %(default)s）")
-    _add_json(p_list)
-    p_stats = kg_sub.add_parser("stats", help="知识图谱统计")
-    _add_json(p_stats)
-    p_viz = kg_sub.add_parser("visualize", help="生成知识图谱交互式 HTML")
-    p_viz.add_argument("output", help="输出 HTML 路径")
-    p_viz.add_argument("--top-k", type=int, default=100,
-                       help="取出现频率最高的前 N 个实体（默认 %(default)s）")
-    _add_json(p_viz)
-    p.set_defaults(func=cmd_kg)
 
     # ingest
     p = sub.add_parser("ingest", help="解析单个文件")
@@ -1023,17 +872,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json(p)
     p.set_defaults(func=cmd_rerank)
 
-    # migrate
-    p = sub.add_parser("migrate", help="从 SQLite 迁移到 LanceDB")
-    p.add_argument("--sqlite", required=True, help="旧 SQLite 索引路径")
-    p.add_argument("--dimensions", type=int, default=4096, help="向量维度（默认 %(default)s）")
-    _add_json(p)
-    p.set_defaults(func=cmd_migrate)
 
     # optimize
-    p = sub.add_parser("optimize", help="优化 LanceDB 表")
-    _add_json(p)
-    p.set_defaults(func=cmd_optimize)
 
     # doctor
     p = sub.add_parser("doctor", help="系统诊断：模型、索引、过期库")

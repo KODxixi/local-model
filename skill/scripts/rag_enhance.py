@@ -25,8 +25,31 @@ from pathlib import Path
 from typing import Any
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SCRIPTS_DIR.parent
+SYSTEM_DIR = SKILL_ROOT / "system"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+def load_prompt(name: str) -> tuple[str, str]:
+    """从 system/*.md 加载 prompt，返回 (system, user)。"""
+    prompt_file = SYSTEM_DIR / f"{name}.md"
+    if not prompt_file.exists():
+        return "", ""
+
+    content = prompt_file.read_text(encoding="utf-8")
+    parts = content.split("## user", 1)
+    system_part = parts[0].replace("## system", "").strip()
+    user_part = parts[1].strip() if len(parts) > 1 else ""
+
+    system_lines = []
+    for line in system_part.splitlines():
+        if line.startswith("#"):
+            continue
+        system_lines.append(line)
+
+    return "\n".join(system_lines).strip(), user_part
+
 
 # 对话模型（用于生成式任务；红线：只跑对话/识图，不跑 embed/rerank）
 # 可用环境变量 LOCAL_RAG_LLM_BASE 覆盖
@@ -153,26 +176,8 @@ def rewrite_query(
     Returns:
         RewrittenQuery
     """
-    system_prompt = """你是一个检索查询优化专家。你的任务是把用户的自然语言查询改写成更适合语义检索的形式。
-
-规则：
-1. 扩展同义词和专业术语（用户说"房子"，可能也指"住宅"、"户型"、"居住空间"）
-2. 拆解复合查询（用户问"A和B的区别"，拆成"A"、"B"两个子查询）
-3. 提取3-5个核心关键词
-4. 去除口语化、疑问句式，转为陈述式检索词
-5. 保持中文，不要翻译成英文
-
-输出格式（严格JSON，不要其他文字）：
-{
-  "rewritten": "优化后的主查询",
-  "sub_queries": ["子查询1", "子查询2"],
-  "keywords": ["关键词1", "关键词2", "关键词3"],
-  "reasoning": "简短的改写理由"
-}"""
-
-    user_prompt = f"原始查询：{query}"
-    if context:
-        user_prompt += f"\n\n上下文：{context}"
+    system_prompt, user_template = load_prompt("query-rewrite")
+    user_prompt = user_template.replace("{query}", query).replace("{context}", context)
 
     try:
         response = _llm_chat(
@@ -297,24 +302,8 @@ def summarize_document(
     if len(content) > max_content_chars:
         truncated += "\n...(内容已截断)"
 
-    system_prompt = """你是一个文档分析专家。为给定的文档生成结构化元数据。
-
-输出格式（严格JSON，不要其他文字）：
-{
-  "title": "文档标题（如果原文没有明确标题，根据内容生成一个简洁标题）",
-  "summary": "2-3句话的内容摘要，涵盖核心观点",
-  "tags": ["标签1", "标签2", "标签3", "标签4", "标签5"],
-  "key_entities": ["关键实体1", "关键实体2", "关键实体3"],
-  "content_type": "文档类型（如：技术笔记/设计文档/会议纪要/代码/报告/新闻/教程等）",
-  "language": "zh或en"
-}
-
-规则：
-- tags 用名词短语，不用句子
-- key_entities 提取人名、地名、项目名、产品名、技术名等
-- summary 要具体，不要空泛"""
-
-    user_prompt = f"文档标题：{title or '(无)'}\n\n文档内容：\n{truncated}"
+    system_prompt, user_template = load_prompt("document-summary")
+    user_prompt = user_template.replace("{title}", title or "(无)").replace("{content}", truncated)
 
     try:
         response = _llm_chat(

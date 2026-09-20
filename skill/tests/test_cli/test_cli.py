@@ -22,11 +22,11 @@ from cli import (
 )
 from rag_indexer import KBConfig
 
-# 15 个顶层子命令
+# 所有顶层子命令
 TOP_LEVEL_COMMANDS = [
     "index", "freshness", "stats", "retrieve", "search-image",
-    "kg", "ingest", "chunk", "rewrite", "summary",
-    "embed", "rerank", "migrate", "optimize", "doctor",
+    "embed", "rerank", "doctor",
+    "ingest", "chunk", "rewrite", "summary",
 ]
 
 
@@ -58,7 +58,7 @@ def test_build_parser_routes_all_commands():
     ap = build_parser()
     choices = _subparser_choices(ap)
     assert choices == set(TOP_LEVEL_COMMANDS)
-    assert len(choices) == 15
+    assert len(choices) == len(TOP_LEVEL_COMMANDS)
 
 
 @pytest.mark.parametrize("cmd", TOP_LEVEL_COMMANDS)
@@ -72,7 +72,6 @@ def test_each_command_parses(cmd: str):
         "stats": [],
         "retrieve": ["hello"],
         "search-image": ["x.png"],
-        "kg": ["list"],
         "ingest": ["f.md"],
         "chunk": ["f.md"],
         "rewrite": ["q"],

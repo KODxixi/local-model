@@ -1,6 +1,0 @@
-# MCP 适配层依赖（仅 server.py 需要；Skill 层不依赖这些）
-#
-# 注意：server.py 用的是 v1 的 FastMCP API。mcp>=2 已把 FastMCP 改名为 MCPServer
-# 并调整了接口，因此这里**锁 <2**。要升到 2.x 需按官方迁移指南改 server.py。
-mcp>=1.8.0,<2
-PyYAML>=6.0
