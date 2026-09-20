@@ -16,7 +16,9 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -863,6 +865,90 @@ class RAGRetriever:
             ranked_by=r.get("ranked_by", "embedding"),
             explain=explain,
         )
+
+    def _init_cache(self) -> None:
+        """初始化 SQLite 缓存表。"""
+        self._cache_db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self._cache_db))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS retrieval_cache (
+                cache_key TEXT PRIMARY KEY,
+                results_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                index_mtime REAL NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def _cache_key(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        mode: str,
+        path_filter: str | None,
+        doc_type_filter: str | None,
+        use_rerank: bool,
+    ) -> str:
+        """生成缓存 key。"""
+        raw = f"{self.kb.name}|{query}|{top_k}|{mode}|{path_filter}|{doc_type_filter}|{use_rerank}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _get_index_mtime(self) -> float:
+        """获取索引最后修改时间（用于缓存失效）。"""
+        try:
+            stats = self.store.stats()
+            return float(stats.get("last_index_time", 0))
+        except Exception:
+            return time.time()  # 出错时用当前时间，相当于缓存失效
+
+    def _get_cached(
+        self,
+        cache_key: str,
+    ) -> list[RetrievalResult] | None:
+        """从缓存读取结果。"""
+        try:
+            conn = sqlite3.connect(str(self._cache_db))
+            row = conn.execute(
+                "SELECT results_json, created_at, index_mtime FROM retrieval_cache WHERE cache_key = ?",
+                (cache_key,),
+            ).fetchone()
+            conn.close()
+            if not row:
+                return None
+            results_json, created_at, index_mtime = row
+            # 检查 TTL
+            if time.time() - created_at > self._cache_ttl:
+                return None
+            # 检查索引是否更新过
+            current_mtime = self._get_index_mtime()
+            if current_mtime > index_mtime:
+                return None
+            # 反序列化
+            data = json.loads(results_json)
+            return [RetrievalResult.from_dict(r) for r in data]
+        except Exception:
+            return None
+
+    def _set_cached(
+        self,
+        cache_key: str,
+        results: list[RetrievalResult],
+    ) -> None:
+        """写入缓存。"""
+        try:
+            results_json = json.dumps([r.to_dict() for r in results], ensure_ascii=False)
+            index_mtime = self._get_index_mtime()
+            conn = sqlite3.connect(str(self._cache_db))
+            conn.execute(
+                "INSERT OR REPLACE INTO retrieval_cache (cache_key, results_json, created_at, index_mtime) VALUES (?, ?, ?, ?)",
+                (cache_key, results_json, time.time(), index_mtime),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # 缓存失败不影响检索
 
     def format_results(self, results: list[RetrievalResult]) -> str:
         """将结果格式化为 agent 友好的文本。"""

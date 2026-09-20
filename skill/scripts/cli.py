@@ -886,6 +886,26 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     ap = build_parser()
     args = ap.parse_args()
+
+    # agent-md 铁律第 4 条：脚本自证，启动时打印 md5
+    if not args.json:  # --json 时不打印，避免污染输出
+        import hashlib as _hashlib
+        from pathlib import Path
+        skill_root = Path(__file__).resolve().parent.parent
+        for _f in [
+            "AGENTS.md",
+            "SKILL.md",
+            "rules/redlines.md",
+            "rules/doctor-output.md",
+            "system/pdf-vlm-prompt.md",
+        ]:
+            _p = skill_root / _f
+            if _p.exists():
+                _h = _hashlib.md5()
+                with open(_p, "rb") as _fp:
+                    while _chunk := _fp.read(8192):
+                        _h.update(_chunk)
+                print(f"[local-model] {_f} md5={_h.hexdigest()[:8]}", file=sys.stderr)
     # P4: 全局 --json（子命令前）与子命令级 --json（子命令后）取 OR。
     # 二者 dest 不同（json_global / json），这里合并成统一的 args.json。
     args.json = bool(getattr(args, "json", False) or getattr(args, "json_global", False))
