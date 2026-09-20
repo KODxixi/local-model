@@ -3,6 +3,31 @@
 > 本文件是 agent 操作本项目的权威参考。所有 agent 必须遵守。
 > **路径约定**：`<SKILL_ROOT>` = skill 层所在目录（公开仓库里就是 `<仓库根>/skill`）。
 
+## 🚀 给 Agent 的快速调用指南（30 秒上手）
+
+**一句话**：把任意杂乱文件变成 agent 可命中的语义知识库。
+
+```bash
+# 1. 诊断系统状态（先跑这个）
+.venv\Scripts\python.exe scripts\cli.py doctor
+
+# 2. 建索引（增量）
+.venv\Scripts\python.exe scripts\cli.py --kb my_docs index
+
+# 3. 检索
+.venv\Scripts\python.exe scripts\cli.py --kb my_docs retrieve "查询内容"
+
+# 4. 解析文件
+.venv\Scripts\python.exe scripts\cli.py ingest <文件路径> --json
+```
+
+**红线**：
+- embed/rerank → 永远只走 **9123**（llama-swap）
+- 对话/视觉 → 走 **8080**（Muse Glimmer 30B）
+- 索引是可再生投影，**永不反向写**
+
+---
+
 ## 项目本质
 
 本地多模态 RAG 系统。**不是**一个独立 MCP，而是**薄入口 + 实现层**的分层架构：
@@ -36,7 +61,6 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | 操作 | 命令 |
 |------|------|
 | 诊断系统状态 | `cli.py doctor`（不需要 `--kb`） |
-| 30B 预热/卸载/查看 | `<venv python> scripts/muse.py start\|stop\|status`（只操作 llama-swap；端点在 registry.local.yaml） |
 | 建索引（增量） | `cli.py --kb <name> index` |
 | 全量重建 | `cli.py --kb <name> index --force` |
 | 文本检索（默认 hybrid+智能权重） | `cli.py --kb <name> retrieve "<query>"` |
@@ -54,14 +78,13 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 
 ## 红线（必须遵守）
 
-1. **5 个模型全部只走 llama-swap 9123**，靠 model id 区分（30B = `muse-glimmer-30b`；8080 已废弃）
-2. 禁止拿 30B 当 embedding/rerank 用，也禁止拿 `text-embedding-*` / `*-reranker-*` 当对话模型用
-3. 服务不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点应急
+1. **embed/rerank 永远只走检索端点（llama-swap 9123）**；对话/视觉端点只跑对话与识图
+2. 禁止把 `text-embedding-*` / `*-reranker-*` load 进对话/视觉端点
+3. 检索不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点到别处应急
 4. 索引是**可再生投影**，真相源是原始文件；永不反向写
 5. 不读取、输出或改写凭据；不扫描 private 目录
-6. **显存优先级：向量/检索模型 > 30B**；所有本地模型按需调用、不常驻；30B 只在打标时按需起（`ttl: 600` 自动收拾）。**互斥已由 llama-swap 的 `groups`（两组都 `exclusive: true`）保证**，两个方向都驱逐，不再需要人工调度（2026-09-20 起机制化）。副作用：任何 embedding/rerank 请求都会把 30B 挤下去，索引任务在跑时 30B 站不住是正常现象
-7. **性能取向：要跑就跑满**——单模型在场时必须吃满 GPU（`-ngl 99` 全层、DFlash 投机解码、实测甜点批大小）；冷加载的代价用「预热」补而不是「常驻」补（2026-09-20）
-8. **`registry.yaml` 是唯一真相源**，模型地址/维度/知识库配置只改这里（私有路径写 `registry.local.yaml`），不改代码
+6. **显存优先级：向量/检索模型 > 30B**；所有本地模型按需调用、不常驻；30B 只在打标时按需起、用完停。两个都要在场时**不要自行调度**——立即通知用户，由用户决定启停顺序（2026-09-20）
+6. **`registry.yaml` 是唯一真相源**，模型地址/维度/知识库配置只改这里（私有路径写 `registry.local.yaml`），不改代码
 
 ## 故障排查
 
@@ -116,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | 文本表4096维 + 图片表2048维分离 | 不同模型维度不同，混在一张表会导致维度冲突 |
 | PDF 入库用 PyMuPDF+WebP+HTML重组 | 文本层优先（快），WebP缓存（增量），HTML重组（保留布局） |
 | 不用 PaddleOCR | 对话/视觉主模型一次完成 OCR+描述+分类，不需要单独的 OCR 引擎 |
-| llama-swap 一个入口两种后端 | 检索模型用 Vulkan llama.cpp、30B 用 CUDA + DFlash，都挂在 9123，靠 model id 分发 + `groups` 互斥 |
+| llama-swap Vulkan + 另一路 CUDA | 检索模型用 Vulkan llama.cpp（TTL装卸，4模型共享），视觉/打标用 CUDA + DFlash（性能最优） |
 | rag_client 零第三方依赖 | 外部项目可直接 import，不会因 lancedb 缺失而失败 |
 | MCP 纯薄入口层 | 消除双轨制，MCP 只做 stdio 协议适配，全部业务逻辑在 Skill 层 |
 | **RRF 混合召回** | 语义/关键词分别排名后用 Reciprocal Rank Fusion 融合，避免不同含义的原始分数直接混合 |
@@ -140,17 +163,14 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 | vl-embedding-2b | 图向量 | 2048 | 检索端点（llama-swap 9123） |
 | text-reranker-8b | 文本精排 | - | 检索端点（llama-swap 9123） |
 | vl-reranker-2b | 图文精排 | - | 检索端点（llama-swap 9123） |
-| **muse-glimmer-30b**（Muse Glimmer 30B + DFlash + Vision） | **视觉/打标/对话主模型（按需加载，TTL 600s）** | - | **llama-swap 9123 (CUDA + DFlash)** |
+| **Muse Glimmer 30B + DFlash + Vision** | **视觉/打标主模型（按需起，非常驻）** | - | **8080 (CUDA + DFlash)** |
 
 **Muse Glimmer 30B（视觉/打标主模型）：**
-- **当前登记的是打标档 `-c 32768 --parallel 8`**；128K 对话档（131,072）**未登记**，
-  需要它就在 `config.yaml` 再登记一个 model id（详见 SKILL.md「Muse Glimmer」一节）
+- 上下文：131,072 tokens（128K 原生；批量打标场景用 32768）
 - 生成速度：125-220 tok/s（DFlash 投机解码）
-- GPU：在场约 20.1 GB / 32.6 GB（2026-09-20 实测）
+- GPU：22-30 GB / 32.6 GB
 - **能力：文本对话 + 视觉理解（Vision）+ 工具调用（Tool use）**
-- 启动命令：登记在 `C:\AI	ools\llama-swap\config.yaml` 的 `models.muse-glimmer-30b.cmd`
-  （必须加 `--mmproj` 启用视觉）；日常不要手敲，用 `scripts/muse.py start` 预热
-- 调用必须带 `"model": "muse-glimmer-30b"`，否则 llama-swap 报 `no model id could be identified`
+- 启动命令：见 `README.md` / `SKILL.md` 的 "Muse Glimmer 30B + DFlash" 部分（必须加 `--mmproj` 启用视觉）
 - 推荐参数：max_tokens=16384, temperature=0.5, top_p=0.9, n_max=10
 
 **视觉打标架构（单模型直连）：**

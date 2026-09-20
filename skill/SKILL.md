@@ -1,10 +1,9 @@
-﻿---
+---
 name: local-model
 description: |
   本地 RAG 系统统一入口：文件解析（PDF/Word/Excel/PPT/图片）、智能分块、向量化索引、混合检索+重排。
   当需要解析杂乱文件、构建知识库、语义检索、召回相关文档时使用。
-  5 个本地模型（4 个检索 + Muse Glimmer 30B 视觉/打标主模型）全部由 llama-swap 9123 托管、
-  请求触发加载、空闲自动卸载；向量存储用 LanceDB。
+  检索模型走 llama-swap 9123，视觉/打标主模型走 Muse Glimmer 8080 (CUDA + DFlash + Vision)，向量存储用 LanceDB。
   不用于网页搜索、远程模型调用或未经确认的共享服务管理。
 ---
 
@@ -206,62 +205,26 @@ cli.py retrieve ──→ 混合召回 (语义+关键词) ──→ RRF ──�
 
 ## 显存与优先级（铁律，2026-09-20 立）
 
-RTX 5090 D 共 32.6 GB。实测：**30B 在场时约 22 GB**，两个 8B 检索模型（embedding +
+RTX 5090 D 共 32.6 GB。实测：**30B 常驻约 22 GB**，两个 8B 检索模型（embedding +
 reranker，Q4_K_M + KV）约 10 GB —— **同时在场必然超订**：
 实测占用 31.3 / 32.6 GB（96%），rerank 直接 `TimeoutError`（`DEFAULT_TIMEOUT=180s`
 × 5 次重试 ≈ 15 分钟），对上层就是"检索不可用"。
 
-1. **一切本地模型按需调用，不常驻。** 5 个模型（4 个检索 + 30B）**全部**由 llama-swap(9123)
-   托管：请求触发加载、空闲 `ttl` 自动卸载。**已经没有需要手工拉起的进程了**
-   （2026-09-20 之前 30B 是手工起在 8080 的、没有 TTL，那个形态已取消）。
+1. **一切本地模型按需调用，不常驻。** 检索模型靠 llama-swap 的 TTL 自动装卸；
+   30B **没有 TTL、是手工起的 llama-server**，必须显式启停。
 2. **优先级：向量/检索模型 > 30B。** 冲突时让 30B 让路，绝不反过来压缩检索。
-3. **30B 只在打标 / 批量视觉任务时按需起。** 起完不必守着 —— `ttl: 600` 会自动收拾；
-   急着还显存就用 `muse.py stop` 立刻卸。
-4. **互斥已由机制保证，不再是人工约定。** llama-swap 的 `groups` 里 `retrieval` 与 `muse`
-   两组都是 `exclusive: true`，**两个方向**的驱逐都成立：加载 30B 会卸掉检索模型，
-   加载检索模型也会卸掉 30B。所以"两个都要在场"的冲突报错不会再出现。
-   - **必须知道的副作用**：任何一次 embedding/rerank 请求都会把 30B 挤下去。
-     索引任务（如 vault 索引）在跑时，30B 基本站不住 ——
-     这是上面第 2 条规则的正确表现，**不是故障**，别去"修"。
+3. **30B 只在打标 / 批量视觉任务时按需起，用完停掉。** 它不是常驻服务。
+4. **遇到"两个都要在场"的显存冲突**：不要自行调度、不要降级硬跑 ——
+   **立即通知用户**（说明谁在占显存、要起什么、预计占用），由用户决定启停顺序。
 
-### 受管入口（用这个，不要手敲命令）
-
-```bash
-<venv python> scripts/muse.py status   # 只读：llama-swap 在线? / 30B 在场? / 显存
-<venv python> scripts/muse.py start    # 预热：打一个最小请求把 30B 拉起来（冷加载实测 15.5s）
-<venv python> scripts/muse.py stop     # 卸载 30B，立刻还显存（不想等 ttl 到期时用）
-```
-
-- 2026-09-20 起 muse.py **不再自己拉进程**，它只操作 llama-swap 的 HTTP 接口
-  （预热 = `POST /v1/chat/completions`，卸载 = `POST /api/models/unload/<id>`）。
-- 启动命令（llama-server 路径 / GGUF / mmproj / DFlash / `-c` / `--parallel`）在
-  `C:\AI	ools\llama-swap\config.yaml` 的 `models.muse-glimmer-30b`；
-  端点与 model id 在 `registry.local.yaml` 的 `muse_glimmer` 段（不进 git）。
-- 30B 的 model id 是 **`muse-glimmer-30b`**。所有调用方都必须带这个名字 ——
-  llama-swap 靠 body 里的 `model` 选后端，裸请求会被拒，实测报
-  `no model id could be identified`。
-
-### 性能取向：要跑就跑满（不常驻，但一旦跑就最快）
-
-「按需调用」与「GPU 拉满」**不冲突**——冲突只发生在**多个模型同时在场**时 ✗。
-单模型在场时就该吃满 GPU：
-
-- **全层 GPU**：`-ngl 99` / `--gpu-layers 99`；回落 CPU 会慢一个数量级 ✗
-- **投机解码 + Flash Attention**：Muse Glimmer 用 DFlash（`--spec-type draft-dflash`
-  + `--spec-draft-n-max 10` + `-fa on`）→ 125–220 tok/s
-- **批处理用实测甜点**：`embed_batch_size=64`、`image_batch_size=64`；llama-server
-  并发 `--parallel 8`（**8 是稳定极限**，>8 触发多 slot bug 的 HTTP 400 ✗）
-- **上下文按场景取，不盲目拉满**：打标 32768 / 对话 131072（KV cache 吃显存 ✗，
-  拉满会把别的模型挤出去）
-- **冷加载的代价用「预热」补，不用「常驻」补**：批量任务开始前先打一个请求把模型
-  拉起来（索引流程已内置 `warmup_on_index: true` ✓），而不是让它一直驻留 ✗
-- 参数明细见本文末「Muse Glimmer 30B + DFlash + Vision」与 README 的批量打标参数表
+30B 启动命令见本文末「Muse Glimmer 30B + DFlash + Vision」一节；
+停止 = 结束该 llama-server 进程（无对应计划任务）。
 
 ## 安全与边界
 
 - 索引是**可再生投影**，真相源是原始文件；永不反向写
 - `index` 会写入 LanceDB（`~/.local-rag/lancedb`），属于本地操作
-- 视觉理解调用 9123 上的 `muse-glimmer-30b`（Vision），会触发 30B 加载（冷加载 ~15.5s）
+- 视觉理解调用 8080 的 Vision 能力，可能触发模型加载
 - 启停/重启 llama-swap、对话模型服务等共享服务需要用户明确授权
 - 不读取、输出或改写凭据；不扫描 private 目录
 
@@ -271,26 +234,17 @@ reranker，Q4_K_M + KV）约 10 GB —— **同时在场必然超订**：
 
 | 服务 | 后端 | GPU 层 | 说明 |
 |---|---|---|---|
-| llama-swap 9123 | Vulkan llama.cpp | `-ngl 99`（全层） | 4 个检索模型（embedding + rerank），TTL 自动装卸 |
-| llama-swap 9123 | CUDA + DFlash + Vision | `--gpu-layers 99` | `muse-glimmer-30b` 对话 / 视觉主模型，125–220 tok/s，TTL 600s |
-
-> 30B 与检索模型现在**同一个入口（9123）**，只是后端二进制约不同（Vulkan vs CUDA）。
-> 靠 model id 区分，靠 `groups` 互斥保证不同时驻留。
+| llama-swap 9123 | Vulkan llama.cpp | `-ngl 99`（全层） | 文本/图文 embedding + rerank，4 个模型，TTL 自动装卸 |
+| Muse Glimmer 8080 | CUDA + DFlash + Vision | `--gpu-layers 99` | 对话 / Agent / 视觉主模型，125–220 tok/s |
 
 ### Muse Glimmer 30B + DFlash + Vision（对话 / 视觉主模型）
 
 **两种已验证配置（RTX 5090 D 32GB）：**
 
-| 场景 | `-c` | `--parallel` | `--spec-draft-n-max` | 是否已登记 |
-|---|---|---|---|---|
-| 批量视觉打标 | 32768 | 8 | 10 | ✅ 已登记为 `muse-glimmer-30b` |
-| 对话 / Agent（长上下文） | 131072 | 1 | 10 | ❌ **未登记** |
-
-> ⚠️ **当前只在 llama-swap 里登记了「打标档」**（2026-09-20 会话决定）。
-> 需要 128K 上下文的调用方（例如需要长上下文的 LLM 生成/RAG 路径
-> 「128K上下文」）现在**拿不到 128K**，会受 32768 上限约束。
-> 要两档并存：在 `config.yaml` 再登记一个 model id（如 `muse-glimmer-30b-chat`，
-> `-c 131072 --parallel 1`），调用方按场景选；两者同属 `muse` 组互斥，不会双份占显存。
+| 场景 | `-c` | `--parallel` | `--spec-draft-n-max` |
+|---|---|---|---|
+| 批量视觉打标 | 32768 | 8 | 10 |
+| 对话 / Agent（长上下文） | 131072 | 1 | 10 |
 
 ```powershell
 # 先把这两个变量换成你自己的路径
@@ -306,12 +260,8 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 例：C:\models\Muse
     --spec-draft-model "$MuseDir\dflash-Muse-Glimmer-30B-Q4_K_M.gguf" `
     --spec-draft-n-max 10 `
     -fa on -c 32768 --threads 20 --parallel 8 `
-    --port <PORT> --host 127.0.0.1
+    --port 8080 --host 127.0.0.1
 ```
-
-> **这条命令现在只是"登记内容"的展开，不要当成手工启动步骤。**
-> 它逐字对应 `C:\AI	ools\llama-swap\config.yaml` 里 `models.muse-glimmer-30b.cmd`，
-> 端口由 llama-swap 动态分配（`${PORT}`），**8080 这个对外端口已废弃**。
 
 **关键参数说明：**
 - `--gpu-layers 99`：全层 offload 到 GPU（不设就退回 CPU，慢一个数量级）
@@ -325,12 +275,12 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 例：C:\models\Muse
 - 以下 DLL 必须复制到 llama.cpp 目录，否则找不到 GPU：
   `cudart64_13.dll` / `cublas64_13.dll` / `cublasLt64_13.dll` / `nvblas64_13.dll`
 
-**批量视觉打标参数（2026-09-20 实测）：**
+**批量视觉打标参数（实测）：**
 
 | 参数 | 值 | 理由 |
 |---|---|---|
-| max_tokens | 16384 | 推理模型的 `reasoning_content` 吃掉大量 token，<8192 会导致 `content` 为空 |
-| temperature | 0.1 | 标签/打标任务要确定性输出，不要创造性发挥 |
+| max_tokens | 8192 | 推理模型的 `reasoning_content` 吃掉大量 token，<4096 会导致 `content` 为空 |
+| temperature | 0.3 | 标签任务要准确，不要创造性发挥 |
 | 图片格式 | JPEG 768px q80 | llama.cpp 不支持 webp data URI，运行时转码；768px 比 1024px 快 47% |
 | 并发 | 8 线程 | GPU 利用率约 85% 已饱和，再高只排队 |
 
@@ -341,8 +291,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 例：C:\models\Muse
 - `--parallel >8`（16/32/64）触发 HTTP 400 Bad Request——llama.cpp 多 slot 配置 bug，**8 是稳定极限**
 - 64 线程同时发请求会打爆 HTTP server（并发约 10MB base64），必须控制在 8 个在途
 - 推理模型返回 `reasoning_content`（思考）和 `content`（正式回答），**只取 `content`**
-- 512px q60 分辨率太低导致事实判断错误（"屋面特写""绿化中庭"误判），不要用
-- `max_tokens < 8192` 时 reasoning 吃光导致 content 为空，必须 ≥16384
+- `max_tokens < 4096` 时 reasoning 吃光导致 content 为空，必须 ≥8192
 
 ## 已知限制
 

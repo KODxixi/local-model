@@ -24,8 +24,7 @@ text_backend:
 # 通过环境变量配置，不写死本机路径：
 #   LOCAL_RAG_VLM_BASE_URL / LOCAL_RAG_VLM_MODEL  (ingest.py VLM)
 #   LOCAL_RAG_LLM_BASE / LOCAL_RAG_LLM_MODEL       (rag_enhance.py 对话)
-# 默认走 http://127.0.0.1:9123 (llama-swap 托管的 Muse Glimmer 30B + Vision，
-# 模型 id "muse-glimmer-30b"，请求触发加载、空闲 ttl 600s 自动卸载)
+# 默认走 http://127.0.0.1:8080 (Muse Glimmer 30B + Vision)
 
 # 向量存储
 vector_store:

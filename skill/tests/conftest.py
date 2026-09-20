@@ -49,12 +49,8 @@ def llama_swap_available() -> bool:
 
 
 def lm_studio_available() -> bool:
-    """对话/视觉端点是否在线。
-
-    2026-09-20 起 30B 并入 llama-swap，与 embedding/rerank 同一个 9123 入口
-    （模型 id "muse-glimmer-30b"），原有的独立 8080 端口已取消。
-    """
-    return _http_get_ok("http://127.0.0.1:9123/v1/models")
+    """对话/视觉端点 (VLM/chat, 8080) 是否在线。"""
+    return _http_get_ok("http://127.0.0.1:8080/v1/models")
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +66,7 @@ requires_lm_studio = pytest.mark.requires_lm_studio
 
 _SERVICE_PROBES = {
     "requires_llama_swap": ("llama-swap 未运行 (http://127.0.0.1:9123)", llama_swap_available),
-    "requires_lm_studio": ("对话/视觉端点 未运行 (http://127.0.0.1:9123)", lm_studio_available),
+    "requires_lm_studio": ("对话/视觉端点 未运行 (http://127.0.0.1:8080)", lm_studio_available),
 }
 
 

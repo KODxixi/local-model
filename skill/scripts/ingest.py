@@ -78,7 +78,7 @@ class Document:
 # ---------------------------------------------------------------------------
 
 # 可用环境变量 LOCAL_RAG_VLM_BASE_URL 覆盖
-VLM_BASE_URL = os.getenv("LOCAL_RAG_VLM_BASE_URL", "http://127.0.0.1:9123")
+VLM_BASE_URL = os.getenv("LOCAL_RAG_VLM_BASE_URL", "http://127.0.0.1:8080")
 # 模型名通过环境变量配置，不写死本机路径
 VLM_MODEL = os.getenv("LOCAL_RAG_VLM_MODEL", "muse-glimmer-30b")
 VLM_TIMEOUT = 120  # 秒，冷加载可能慢

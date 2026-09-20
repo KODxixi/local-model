@@ -35,7 +35,7 @@ flowchart TB
 
     subgraph MODELS["本地模型服务（GPU）"]
         LS["llama-swap 127.0.0.1:9123<br/>Vulkan llama.cpp · TTL 自动装卸<br/>text-embedding-qwen3-embedding-8b 4096<br/>text-reranker-8b<br/>vl-embedding-2b 2048<br/>vl-reranker-2b"]
-        MG["Muse Glimmer 30B @ llama-swap 9123<br/>CUDA + DFlash + Vision<br/>muse-glimmer-30b · TTL 600s<br/>对话 / OCR / 视觉理解"]
+        MG["Muse Glimmer 127.0.0.1:8080<br/>CUDA + DFlash + Vision<br/>对话 / OCR / 视觉理解"]
     end
 
     IN --> SKILL
@@ -64,41 +64,13 @@ flowchart TB
 | **图向量** | vl-embedding-2b | 2048 | llama-swap 9123 | Vulkan, -ngl 99 |
 | **文本精排** | text-reranker-8b | - | llama-swap 9123 | Vulkan, -ngl 99 |
 | **图文精排** | vl-reranker-2b | - | llama-swap 9123 | Vulkan, -ngl 99 |
-| **视觉理解** | muse-glimmer-30b (Muse-Glimmer-30B + mmproj) | - | llama-swap 9123 | CUDA, --gpu-layers 99 |
-| **对话/改写** | muse-glimmer-30b (Muse-Glimmer-30B + DFlash) | - | llama-swap 9123 | CUDA + DFlash, --gpu-layers 99 |
+| **视觉理解** | Muse-Glimmer-30B-Q4_K_M + mmproj | - | Muse Glimmer 8080 | CUDA, --gpu-layers 99 |
+| **对话/改写** | Muse-Glimmer-30B-Q4_K_M + DFlash | - | Muse Glimmer 8080 | CUDA + DFlash, --gpu-layers 99 |
 
 **选型理由：**
 - 检索模型（embedding/rerank）走 llama-swap：Vulkan 版 llama.cpp，TTL 自动装卸，4个模型共享一套基础设施
-- 视觉/打标同样走 llama-swap 9123 的 `muse-glimmer-30b`（CUDA + DFlash）：125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR。它与检索模型**同一入口、不同 model id**，由 `groups` 互斥保证不同时驻留
+- 视觉/对话走 Muse Glimmer 8080：CUDA 13.3 + DFlash 投机解码，128K 上下文，125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR
 - 所有模型全层 GPU（`--gpu-layers 99`），不走 CPU
-
-**性能取向：要跑就跑满（2026-09-20 立）**：「按需调用」与「GPU 拉满」不冲突 —— 冲突只发生在
-多个模型**同时在场**时。单模型在场时应吃满 GPU：`-ngl 99` 全层、DFlash 投机解码、`-fa on`、
-实测甜点批大小（64 / `--parallel 8`，8 是稳定极限）。冷加载的代价用**预热**补，不用常驻补。
-
-**显存与优先级（铁律，2026-09-20）**：32.6 GB 装不下 30B（~22 GB）+ 两个 8B 检索模型
-（~10 GB）同时在场 —— 实测 96% 占用时 rerank 直接 `TimeoutError`。因此：**一切本地模型
-按需调用、不常驻**；**优先级：向量/检索模型 > 30B**；**30B 只在打标/批量视觉时按需起、
-用完停**。
-
-**2026-09-20 起互斥由机制保证**：5 个模型全在 llama-swap 里，`groups` 的 `retrieval` 与 `muse`
-两组都设 `exclusive: true`，**两个方向**的驱逐都成立 —— 加载 30B 卸检索、加载检索卸 30B，
-"两个都要在场"的报错不会再出现。代价是**任何 embedding/rerank 请求都会把 30B 挤下去**：
-索引任务在跑时 30B 站不住，这是规则的正确表现，不是故障。
-
-**30B 的受管入口**（用这个，别手敲命令）：
-
-```powershell
-<venv python> scripts/muse.py status   # 只读：llama-swap 在线? / 30B 在场? / 显存
-<venv python> scripts/muse.py start    # 预热：触发加载 30B（冷加载 15.5s）
-<venv python> scripts/muse.py stop     # 卸载 30B，立刻还显存
-```
-
-muse.py 只操作 llama-swap 的 HTTP 接口，**不再自己拉进程**。启动命令在
-`C:\AI	ools\llama-swap\config.yaml` 的 `models.muse-glimmer-30b`；端点与 model id 在
-`registry.local.yaml` 的 `muse_glimmer` 段（不进 git）。下面的 raw 命令仅供理解参数。
-
-实测：卸载释放 20.1 GB；冷加载 15.5s 就绪。
 
 ## 数据库 / 向量库
 
@@ -490,8 +462,8 @@ knowledge_bases:
 | 环境变量 | 作用 | 默认 |
 |---|---|---|
 | `LOCAL_RAG_BASE_URL` | embed / rerank 端点（llama-swap） | `http://127.0.0.1:9123` |
-| `LOCAL_RAG_VLM_BASE_URL` | 图片 / PDF 扫描页的 VLM 端点 | `http://127.0.0.1:9123` |
-| `LOCAL_RAG_LLM_BASE` | 查询改写 / 摘要的 LLM 端点 | `http://127.0.0.1:9123` |
+| `LOCAL_RAG_VLM_BASE_URL` | 图片 / PDF 扫描页的 VLM 端点 | `http://127.0.0.1:8080` |
+| `LOCAL_RAG_LLM_BASE` | 查询改写 / 摘要的 LLM 端点 | `http://127.0.0.1:8080` |
 
 ## 外部项目集成
 
@@ -540,14 +512,10 @@ results = rerank_texts("query", ["doc1", "doc2"], top_k=5)
 
 所有模型默认跑在 GPU 上（RTX 5090 D 32GB）：
 
-- **llama-swap 9123**：Vulkan llama.cpp，`-ngl 99`（全层），4 个检索模型，TTL 300s 自动卸载
-- **llama-swap 9123**：CUDA 13.3 + DFlash + Vision，`muse-glimmer-30b`，TTL 600s 自动卸载，125-220 tok/s
+- **llama-swap 9123**：Vulkan llama.cpp，`-ngl 99`（全层），4个检索模型，TTL 300s 自动卸载
+- **Muse Glimmer 8080**：CUDA 13.3 + DFlash 投机解码 + Vision，128K 上下文，125-220 tok/s，视觉理解 + 对话生成
 
-### Muse Glimmer 30B + DFlash（视觉/打标主模型，llama-swap 托管）
-
-**已登记配置：打标档 `-c 32768 --parallel 8`**（llama-swap `models.muse-glimmer-30b`）。
-下表 raw 命令是**对话档 `-c 131072`**，**当前未登记** —— 需要 128K 的调用方拿不到 128K，
-要并存就在 config.yaml 再登记一个 model id（如 `muse-glimmer-30b-chat`）。
+### Muse Glimmer 30B + DFlash（对话/Agent 主模型）
 
 **最优配置（已验证，RTX 5090 D 32GB）：**
 
@@ -564,7 +532,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
     --spec-draft-model "$MuseDir\dflash-Muse-Glimmer-30B-Q4_K_M.gguf" `
     --spec-draft-n-max 10 `
     -fa on -c 131072 --threads 20 `
-    --port <PORT> --host 127.0.0.1
+    --port 8080 --host 127.0.0.1
 ```
 
 **性能指标（实测）：**
@@ -583,8 +551,8 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
   - `nvblas64_13.dll`
 
 **API 调用：**
-- OpenAI 兼容：`http://127.0.0.1:9123/v1/chat/completions`
-- model 参数：**`muse-glimmer-30b`**（llama-swap 靠它选后端；裸请求会被拒）
+- OpenAI 兼容：`http://127.0.0.1:8080/v1/chat/completions`
+- model 参数：主模型完整路径
 
 ### Agent 调用推荐配置（杂活 + 代码 + 长上下文）
 
@@ -618,10 +586,9 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 
 ## 红线
 
-1. 5 个模型**全部只走 llama-swap 9123**，靠 model id 区分（8080 已废弃）
-2. 禁止拿 30B（`muse-glimmer-30b`）当 embedding/rerank 用，也禁止拿 `text-embedding-*` /
-   `*-reranker-*` 当对话模型用 —— 同一个端点，只能靠 model id 约束
-3. 服务不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点应急
+1. embed/rerank **永远只走 llama-swap 9123**；Muse Glimmer 8080 **只跑对话/视觉理解**
+2. 禁止把 `text-embedding-*` / `*-reranker-*` load 进 Muse Glimmer 8080
+3. 检索不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点到 Muse Glimmer 应急
 4. 索引是**可再生投影**，真相源是原始文件；永不反向写
 5. 不读取、输出或改写凭据；不扫描 private 目录
 
