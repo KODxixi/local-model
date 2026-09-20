@@ -241,6 +241,13 @@ class RAGRetriever:
         use_query_instruction: bool | None = None,  # None=用 self 默认, True/False=覆盖
         trace: bool = False,
         trace_output: str | None = None,
+        # 已砍功能的参数（保留签名兼容，但实际不生效）
+        use_mmr: bool = False,
+        mmr_lambda: float = 0.5,
+        parent_child: bool = False,
+        parent_expand_chars: int = 200,
+        expand_query: bool = False,
+        num_expansions: int = 2,
     ) -> list[RetrievalResult]:
         """检索知识库。
 
@@ -289,6 +296,7 @@ class RAGRetriever:
         default_qinstr = getattr(self, "use_query_instruction", True)
         effective_qinstr = default_qinstr if use_query_instruction is None else use_query_instruction
         self._query_instruction_override = effective_qinstr
+        routed_mode = None  # auto_route 已砍，保留变量兼容
 
         # P0-3: default recall_size from registry performance section.
         if recall_size is None:

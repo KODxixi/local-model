@@ -276,21 +276,11 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                     mode=args.mode,
                     use_rerank=not args.no_rerank,
                     path_filter=args.path_filter,
-                    use_mmr=args.mmr,
-                    mmr_lambda=args.mmr_lambda,
-                    parent_child=args.parent_child,
-                    parent_expand_chars=args.expand_chars,
-                    auto_route=args.auto_route,
-                    smart_weights=not args.no_smart_weights,
-                    expand_query=args.expand,
-                    num_expansions=args.num_expansions,
-                    context=args.context,
                 )
                 for r in results:
                     r.metadata["kb"] = name
                 all_results.extend(results)
             except Exception as e:
-                # P0-4：收集跳过的库名和错误，不再静默吞掉
                 skipped.append({"kb": name, "error": str(e)[:300]})
         # 按 score 降序，取 top_k
         all_results.sort(key=lambda r: r.score, reverse=True)
@@ -322,15 +312,6 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         mode=args.mode,
         use_rerank=not args.no_rerank,
         path_filter=args.path_filter,
-        use_mmr=args.mmr,
-        mmr_lambda=args.mmr_lambda,
-        parent_child=args.parent_child,
-        parent_expand_chars=args.expand_chars,
-        auto_route=args.auto_route,
-        smart_weights=not args.no_smart_weights,
-        expand_query=args.expand,
-        num_expansions=args.num_expansions,
-        context=args.context,
         trace=bool(trace_output),
         trace_output=trace_output,
     )
