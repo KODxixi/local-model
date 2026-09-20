@@ -679,12 +679,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # 2. 检查 llama-swap embedding 端点 + 当前加载模型
     # 端点不硬编码：embedding 走 rag_client.DEFAULT_BASE_URL（9123），
-    # 对话/视觉端点走 rag_enhance.DEFAULT_LLM_BASE（默认 8080，仅对话/识图）。
+    # 对话/视觉端点走 rag_enhance.DEFAULT_LLM_BASE（默认 9123，仅对话/识图）。
     from rag_client import DEFAULT_BASE_URL
     try:
         from rag_enhance import DEFAULT_LLM_BASE
     except ImportError:
-        DEFAULT_LLM_BASE = "http://127.0.0.1:8080"
+        DEFAULT_LLM_BASE = "http://127.0.0.1:9123"
 
     llama_swap_ok = True
     try:

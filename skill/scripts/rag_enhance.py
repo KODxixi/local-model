@@ -30,7 +30,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 # 对话模型（用于生成式任务；红线：只跑对话/识图，不跑 embed/rerank）
 # 可用环境变量 LOCAL_RAG_LLM_BASE 覆盖
-DEFAULT_LLM_BASE = os.getenv("LOCAL_RAG_LLM_BASE", "http://127.0.0.1:8080")
+DEFAULT_LLM_BASE = os.getenv("LOCAL_RAG_LLM_BASE", "http://127.0.0.1:9123")
 # 模型名通过环境变量配置，不写死本机路径
 DEFAULT_LLM_MODEL = os.getenv("LOCAL_RAG_LLM_MODEL", "muse-glimmer-30b")
 DEFAULT_TIMEOUT = 120

@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
-"""Muse Glimmer 30B（8080）的受管启停入口。
+"""Muse Glimmer 30B 的受管入口（2026-09-20 改版：由「自己拉起进程」改为「操作 llama-swap」）。
 
-为什么要有它：30B 没有 TTL、不是计划任务，过去只能手工敲一整条 llama-server 命令，
-于是"按需调用"落不了地、也没人知道它什么时候该停。本脚本把启停变成一个动作。
+为什么改：30B 原先由本脚本在 8080 手工拉起、没有 TTL，起了一直待到手动停，
+「按需调用」落不了地。现在它和 4 个检索模型一样由 llama-swap(9123) 托管：
+请求触发加载、空闲 ttl 自动卸载。本脚本因此不再启动进程，只做三件事：
 
-规则（见 SKILL.md「显存与优先级」）：
-  - 一切本地模型按需调用，不常驻
-  - 优先级：向量/检索模型 > 30B
-  - 30B 只在打标 / 批量视觉时按需起，用完停
-  - 显存不足时**拒绝启动**并说明谁在占，不要自行硬起（除非显式 --yes）
+  status —— 只读：llama-swap 是否在线、30B 是否在场、显存
+  start  —— 预热：打一个最小请求把 30B 拉起来（对应 SKILL.md「冷加载的代价用预热补」；
+            冷加载实测 15.5s，批量任务开始前先打一下，别让第一条正式请求去付这个时间）
+  stop   —— 卸载：调 llama-swap 的 unload 接口立刻还显存（不想等 ttl 到期时用）
 
-私有路径从 registry.local.yaml 的 muse_glimmer 段读取（本机配置，不进 git）。
+注意：30B 与检索模型由 llama-swap 的互斥组保证不同时驻留
+（SKILL.md 铁律「检索模型 > 30B」）。所以任何 embedding/rerank 请求都会把 30B 挤下去 ——
+`status` 看到「已被挤掉」是正常的，不是故障。
 
 用法：
   <venv python> scripts/muse.py status
-  <venv python> scripts/muse.py start [--yes]
+  <venv python> scripts/muse.py start
   <venv python> scripts/muse.py stop
+
+端口/模型 id 从 registry.local.yaml 的 muse_glimmer 段读取（本机私有配置，不进 git）。
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -33,36 +36,31 @@ HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent
 REGISTRY_LOCAL = SKILL_ROOT / "registry.local.yaml"
 
+DEFAULTS = {
+    "base_url": "http://127.0.0.1:9123",
+    "model_id": "muse-glimmer-30b",
+    "warmup_timeout": 300,
+}
+
 
 def load_cfg() -> dict:
-    if not REGISTRY_LOCAL.is_file():
-        sys.exit(f"缺少 {REGISTRY_LOCAL}（本机私有配置，含 30B 的路径）")
-    import yaml  # 依赖已在 requirements.txt
+    cfg = dict(DEFAULTS)
+    if REGISTRY_LOCAL.is_file():
+        import yaml  # 依赖已在 requirements.txt
 
-    data = yaml.safe_load(REGISTRY_LOCAL.read_text(encoding="utf-8")) or {}
-    cfg = data.get("muse_glimmer")
-    if not cfg:
-        sys.exit(
-            "registry.local.yaml 里没有 muse_glimmer 段。示例：\n"
-            "muse_glimmer:\n"
-            "  llama_server: <LLAMA_CPP_DIR>\\llama-server.exe\n"
-            "  models_dir: <MODELS_DIR>\\Muse\n"
-            "  model: Muse-Glimmer-30B-....gguf\n"
-            "  mmproj: mmproj-....gguf\n"
-            "  draft_model: dflash-....gguf\n"
-            "  port: 8080\n"
-            "  context: 32768\n"
-            "  threads: 20\n"
-            "  parallel: 1\n"
-            "  min_free_gb: 24\n"
-            "  log: <临时目录>\\muse-glimmer.log"
-        )
+        data = yaml.safe_load(REGISTRY_LOCAL.read_text(encoding="utf-8")) or {}
+        cfg.update(data.get("muse_glimmer") or {})
     return cfg
 
 
-def http_get(url: str, timeout: float = 4.0):
+def http(url: str, payload: dict | None = None, timeout: float = 10.0):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"} if data else {},
+    )
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, ""
@@ -70,28 +68,14 @@ def http_get(url: str, timeout: float = 4.0):
         return None, ""
 
 
-def port_serving(port: int) -> bool:
-    code, _ = http_get(f"http://127.0.0.1:{port}/v1/models")
-    return code == 200
-
-
-def ps(command: str) -> str:
-    out = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", command],
-        capture_output=True, text=True, errors="replace",
-    )
-    return (out.stdout or "").strip()
-
-
-def find_pid(port: int) -> int | None:
-    """按命令行里的 --port <port> 找 llama-server 进程（比按端口号更准，避免误杀）。"""
-    cmd = (
-        "$p = Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
-        f"Where-Object {{ $_.CommandLine -match '--port {port}(\\s|$)' }} | "
-        "Select-Object -First 1; if ($p) { $p.ProcessId }"
-    )
-    out = ps(cmd)
-    return int(out) if out.isdigit() else None
+def running_models(base_url: str) -> list[dict]:
+    code, body = http(f"{base_url}/running", timeout=8)
+    if code != 200:
+        return []
+    try:
+        return json.loads(body).get("running") or []
+    except Exception:
+        return []
 
 
 def vram() -> tuple[int, int] | None:
@@ -106,129 +90,76 @@ def vram() -> tuple[int, int] | None:
         return None
 
 
-def llama_swap_running() -> list[str]:
-    code, body = http_get("http://127.0.0.1:9123/running")
-    if code != 200:
-        return []
-    try:
-        return [m.get("model", "?") for m in json.loads(body).get("running", [])]
-    except Exception:
-        return []
-
-
 def cmd_status(cfg: dict) -> int:
-    port = int(cfg["port"])
-    pid = find_pid(port)
-    print(f"30B (Muse Glimmer) 受管入口 — 端口 {port}")
-    print(f"  进程: {'PID ' + str(pid) if pid else '未运行'}")
-    print(f"  端口: {'在服务' if port_serving(port) else '无响应'}")
+    base, mid = cfg["base_url"], cfg["model_id"]
+    code, _ = http(f"{base}/v1/models", timeout=6)
+    print(f"Muse Glimmer 30B 受管入口 — llama-swap {base}")
+    print(f"  llama-swap: {'在线' if code == 200 else '无响应'}")
+    models = running_models(base)
+    ids = [m.get("model") for m in models]
+    here = mid in ids
+    print(f"  30B 在场: {'是' if here else '否'}")
+    if here:
+        m = next(m for m in models if m.get("model") == mid)
+        print(f"    ttl={m.get('ttl')}s  state={m.get('state')}  端口={m.get('proxy')}")
+    others = [i for i in ids if i != mid]
+    print(f"  检索模型在场: {', '.join(others) if others else '无'}")
+    if here and others:
+        print("  ⚠️ 30B 与检索模型同时在场 —— 不该发生（llama-swap 互斥组应已阻止），请查 groups 配置")
     mem = vram()
     if mem:
-        used, total = mem
-        print(f"  显存: {used} / {total} MiB ({round(used * 100 / total)}%)")
-    rl = llama_swap_running()
-    print(f"  检索模型(llama-swap 9123)已加载: {', '.join(rl) if rl else '无'}")
-    if pid and rl:
-        print("  ⚠️ 30B 与检索模型同时在场 —— 按规则应让 30B 让路（优先级：检索 > 30B）")
+        print(f"  显存: {mem[0]} / {mem[1]} MiB ({round(mem[0] * 100 / mem[1])}%)")
     return 0
 
 
-def cmd_start(cfg: dict, yes: bool) -> int:
-    port = int(cfg["port"])
-    if port_serving(port):
-        print(f"已在运行（PID {find_pid(port)}），不重复启动")
+def cmd_start(cfg: dict) -> int:
+    base, mid = cfg["base_url"], cfg["model_id"]
+    if any(m.get("model") == mid for m in running_models(base)):
+        print(f"已加载（{mid}），无需预热")
         return 0
-    rl = llama_swap_running()
-    mem = vram()
-    need = float(cfg.get("min_free_gb", 24))
-    if mem and rl:
-        free = (mem[1] - mem[0]) / 1024
-        if free < need and not yes:
-            print(f"拒绝启动：空闲显存 {free:.1f} GB < 需要的 {need} GB，且检索模型在场：")
-            print(f"  {', '.join(rl)}")
-            print("  按规则（SKILL.md「显存与优先级」）不要自行硬起：")
-            print("  要么等检索模型 TTL 卸载（空闲 5 分钟），要么请用户决定启停顺序。")
-            print("  确认要起就加 --yes。")
-            return 2
-    models = Path(cfg["models_dir"])
-    cmd = [
-        str(cfg["llama_server"]),
-        "--gpu-layers", "99",
-        "-m", str(models / cfg["model"]),
-        "--mmproj", str(models / cfg["mmproj"]),
-        "--spec-type", "draft-dflash",
-        "--spec-draft-model", str(models / cfg["draft_model"]),
-        "--spec-draft-n-max", str(cfg.get("draft_n_max", 10)),
-        "-fa", "on",
-        "-c", str(cfg.get("context", 32768)),
-        "--threads", str(cfg.get("threads", 20)),
-        "--parallel", str(cfg.get("parallel", 1)),
-        "--port", str(port),
-        "--host", "127.0.0.1",
-    ]
-    # 按路径构造检查，不数 cmd 下标（2026-09-20 修：下标法把 -m 这类 flag 当路径，报"缺少文件: -m"）
-    for p in (
-        Path(cmd[0]),
-        models / cfg["model"],
-        models / cfg["mmproj"],
-        models / cfg["draft_model"],
-    ):
-        if not p.is_file():
-            print(f"缺少文件: {p}")
-            return 1
-    log_path = cfg.get("log") or str(Path(os.environ.get("TEMP", ".")) / "muse-glimmer.log")
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "ab") as log:
-        subprocess.Popen(
-            cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
-    print(f"已启动，等待就绪（日志 {log_path}）…")
+    print(f"预热中：向 {base} 发一个最小请求触发加载（冷加载约 15.5s）…")
     t0 = time.time()
-    while time.time() - t0 < 300:
-        if port_serving(port):
-            print(f"就绪：{time.time() - t0:.1f}s（冷加载实测）")
-            return 0
-        time.sleep(3)
-    print("300 秒内未就绪，请看日志")
-    return 1
+    code, _ = http(
+        f"{base}/v1/chat/completions",
+        {"model": mid, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        timeout=float(cfg["warmup_timeout"]),
+    )
+    if code != 200:
+        print(f"预热失败：HTTP {code}。查 {base}/running 与 /logs/stream/upstream")
+        return 1
+    print(f"已就绪：{time.time() - t0:.1f}s（含冷加载）")
+    print(f"  注意：空闲 {cfg.get('ttl_hint', 600)}s 后会被 llama-swap 自动卸载；\n"
+          f"  期间任何检索请求也会把它挤下去（互斥组，见 SKILL.md「显存与优先级」）。")
+    return 0
 
 
 def cmd_stop(cfg: dict) -> int:
-    port = int(cfg["port"])
-    pid = find_pid(port)
-    if not pid:
-        print("未发现运行中的 30B（按 --port 匹配）")
+    base, mid = cfg["base_url"], cfg["model_id"]
+    if not any(m.get("model") == mid for m in running_models(base)):
+        print(f"{mid} 当前不在场（多半是空闲超 ttl 已自动卸载，或被检索请求挤下去了），无需操作")
         return 0
     before = vram()
-    ps(f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue")
-    for _ in range(20):
-        if not port_serving(port):
-            break
-        time.sleep(1)
+    code, _ = http(f"{base}/api/models/unload/{mid}", payload={}, timeout=60)
+    if code != 200:
+        print(f"卸载失败：HTTP {code}（llama-swap 是否在线？）")
+        return 1
     after = vram()
-    print(f"已停止 PID {pid}")
+    print(f"已卸载 {mid}")
     if before and after:
         print(f"  显存 {before[0]} → {after[0]} MiB（释放 {(before[0] - after[0]) / 1024:.1f} GB）")
     return 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Muse Glimmer 30B 受管启停")
+    ap = argparse.ArgumentParser(description="Muse Glimmer 30B 受管入口（llama-swap 托管）")
     sub = ap.add_subparsers(dest="action", required=True)
-    sub.add_parser("status", help="只读：进程/端口/显存/检索模型是否在场")
-    p_start = sub.add_parser("start", help="启动 30B（显存不足时拒绝，除非 --yes）")
-    p_start.add_argument("--yes", action="store_true", help="显存不足也强行启动")
-    sub.add_parser("stop", help="停止 30B 并释放显存")
+    sub.add_parser("status", help="只读：llama-swap / 30B 是否在场 / 显存")
+    sub.add_parser("start", help="预热：触发加载 30B")
+    sub.add_parser("stop", help="卸载 30B，立刻还显存")
     args = ap.parse_args()
     cfg = load_cfg()
-    if args.action == "status":
-        return cmd_status(cfg)
-    if args.action == "start":
-        return cmd_start(cfg, args.yes)
-    return cmd_stop(cfg)
+    return {"status": cmd_status, "start": cmd_start, "stop": cmd_stop}[args.action](cfg)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
