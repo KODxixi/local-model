@@ -1,4 +1,4 @@
-﻿---
+---
 name: local-model
 description: 本地模型统一调用与调度（llama-swap + 对话端点）。底层实现参考：端点、模型、配置陷阱、排障手册、性能测量方法。agent 日常调用请用 scripts/cli.py，用法见 SKILL.md。
 ---
@@ -23,33 +23,39 @@ description: 本地模型统一调用与调度（llama-swap + 对话端点）。
 1. **统一入口**：本地推理和模型调度走统一接口，不手写 embedding/rerank 调用、不手工拼 llama-server 参数。
    只读诊断例外：可对已登记的 loopback 端点执行 `GET /running` 或查看 `/v1/models` 注册列表；
    注册不等于已加载，这不授权 POST、推理、装卸或服务管理。
-2. **检索 vs 对话双轨**：检索模型（embed/rerank）由 **llama-swap**（端口 9123）统一管理——
-   按需 spawn、TTL 自动卸载、单 OpenAI 兼容端点；对话/生成走另一路（默认 8080，可环境变量覆盖）。
+2. **单一调度器（2026-09-21 甲-1）**：4 个模型（检索 3 + 对话/视觉 1）**全由 llama-swap**
+   （端口 9123）管理 —— 按需 spawn、`ttl` 自动卸载、单 OpenAI 兼容端点。
+   甲-1 前对话/生成走 8080 独立进程，该路径已退役（计划任务 `MuseGlimmer` 置 Disabled）。
 3. **配置驱动**：新增知识库 = 改 `registry.yaml` 加一段；改模型 = 改 llama-swap 的 `config.yaml`，不改代码。
 
 ### 红线
 
-1. **embed/rerank 永远只走检索端点（9123）**；对话/视觉端点（默认 8080）只跑对话/识图。
-2. **禁止**把 `text-embedding-*` / `*-reranker-*` load 进对话端点；
-   `load_model` / `unload_model` / `list_models` 只管对话与视觉模型。
-3. **禁止**把任何 embed/rerank 端点配置指向对话/视觉端点（默认 8080）。检索不通时先 `curl 127.0.0.1:9123/running`
+1. **embed/rerank 只走 9123 的检索模型**；对话/视觉只走 9123 的 `muse-glimmer-30b`。
+   甲-1 后两者同端口，边界由**模型 id** 决定，不再是端口。
+2. **禁止**把 `text-embedding-*` / `*-reranker-*` 塞进对话路径；反之亦然。
+3. **禁止**把任何 embed/rerank 端点配置指向对话模型。检索不通时先 `curl 127.0.0.1:9123/running`
    （模型 TTL 装卸，看当前加载），**绝不**靠改端点到别处应急。
 
 ## 架构
 
 ```
 llama-swap (127.0.0.1:9123, 单端点 /v1/embeddings + /v1/rerank + /v1/models)
- ├─ text-embedding-qwen3-embedding-8b   Qwen3-Embedding-8B Q4_K_M     (Vulkan llama.cpp)
- ├─ text-reranker-8b                    Qwen3-Reranker-8B Q4_K_M
+ ├─ text-embedding-qwen3-embedding-8b   Qwen3-Embedding-8B Q4_K_M     (CUDA llama.cpp, 2026-09-21 切换)
+ ├─ vl-reranker-2b                      文本+图文精排共用 (selfconv)
  ├─ vl-embedding-2b                     Qwen3-VL-Embedding-2B Q8_0 (+mmproj)
  └─ vl-reranker-2b                      Qwen3-VL-Reranker-2B 自转 Q8_0
-对话/视觉端点 (默认 8080)   ← 仅对话/识图（VLM）
+muse-glimmer-30b (同在 9123)  ← 仅对话/识图（VLM），ttl 900 空闲自卸
 外部图文检索 CLI  ← LanceDB 检索（embed/rerank 走 llama-swap）
 ```
 
-配置：llama-swap 的 `config.yaml`；推理运行时目录下放 llama-server 二进制（Vulkan 版走 GPU）。
+配置：llama-swap 的 `config.yaml`；推理运行时目录下放 llama-server 二进制（CUDA 版走 GPU，2026-09-21 起）。
 
-## 工具接口（MCP 层）
+## 工具接口（**已退役的 MCP 层** —— 下表仅作历史参考）
+
+> ⚠️ **下表的 8 个工具在 2026-09-21 随 `local-models` MCP 一起退役**，目录已删。
+> 现行入口是 `scripts/cli.py`（12 个子命令，见 `tools/cli-commands.md`）。
+> **留在下面是因为最后那段的授权规则仍然有效**：
+> 真实推理（embedding/rerank/VLM）不是只读操作，显存调度须单独授权。
 
 | 工具 | 签名 | 用途 |
 |---|---|---|
@@ -82,13 +88,14 @@ llama-swap (127.0.0.1:9123, 单端点 /v1/embeddings + /v1/rerank + /v1/models)
 | 用途 | 模型 | 位置 |
 |---|---|---|
 | 文本 embedding | `text-embedding-qwen3-embedding-8b`（8B，4096 维，MRL 可截 1024） | 检索端点 9123 |
-| 文本 rerank | `text-reranker-8b`（8B） | 检索端点 9123 |
+| 文本 rerank | `vl-reranker-2b`（2B，与图文共用） | 检索端点 9123 |
 | 图文 embedding | `vl-embedding-2b`（2B，2048 维） | 检索端点 9123 |
 | 图文 rerank | `vl-reranker-2b`（2B，自转 Q8_0） | 检索端点 9123 |
-| 对话/视觉 | 视觉语言模型（VLM），支持工具调用 | 对话/视觉端点（默认 8080） |
+| 对话/视觉 | 视觉语言模型（VLM），支持工具调用 | 同入口 9123 的 `muse-glimmer-30b` |
 
-**选型结论**：文本侧 = Qwen3-Embedding-8B + Qwen3-Reranker-8B；图文侧 = Qwen3-VL-Embedding-2B +
-Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全的单模型。
+**选型结论**：文本侧 = Qwen3-Embedding-8B + **vl-reranker-2b**（2026-09-21 起兼任；原
+Qwen3-Reranker-**8B** 已从 llama-swap 摘除，见 config.yaml 的『已移除的模型』段）；
+图文侧 = Qwen3-VL-Embedding-2B + Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全的单模型。
 
 - **文本 rerank 用转换质量好的那份 GGUF**：缺 `cls.output` 张量的转换会返回垃圾分数（判据见下节）。
 - **图文侧用 2B embed + 2B rerank**：llama.cpp 对 2B 有实测验证；更大的 rerank 属可选升级。
@@ -102,9 +109,10 @@ Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全
 
 - **llama-swap `9123`**：检索统一入口。模型 spawn 到 10001+ 端口，TTL 默认 300s。
   改模型/加模型 = 改 `config.yaml` + **重启 llama-swap**（它只在启动时读配置）。
-- **推理运行时**：Vulkan 版 llama-server 走 GPU；CPU 版慢，仅作回退。
+- **推理运行时**：检索三模型现用 **CUDA 版** llama-server（2026-09-21 起；此前是 Vulkan 版）；CPU 版慢，仅作回退。
   llama-server 必须显式 offload 全部层（`-ngl 99`）才用 GPU。
-- **为什么选 Vulkan 而不是 CUDA**：选它是为了"能上 GPU"（当时手里只有纯 CPU 构建）。
+- **⚠️ 2026-09-21 更正（本节以下"Vulkan 更快"已被推翻）**：下表"Vulkan 稳态更快"是小批量(批32)单路测量。**全量索引是批量 prefill（矩阵-矩阵），Vulkan 在 NVIDIA 拿不到 Tensor Core，实测逐条 ~17/s、>256 断崖；切 CUDA 后稳态 ~140–150/s**。检索三模型已全部改 `llama.cpp-cuda`。
+   - **历史记录（小批量、当时结论，勿再据此选型）**：选 Vulkan 当年为了"能上 GPU"。
   三条理由——自包含（走驱动自带 Vulkan，无需 CUDA runtime / PATH 折腾）、
   对新架构（如 Blackwell sm_120）的支持更确定性、体积显著更小（32MB vs 512MB）。
   **稳态下 Vulkan 反而更快，"换 CUDA 提速"不成立**——同 GGUF、批 32 × 4 轮取平均实测：
@@ -147,39 +155,77 @@ Qwen3-VL-Reranker-2B。按模态分专才，**不要**为"统一"换成大而全
 
 | 模型 | `ttl` | 冷加载实测 | 热态 |
 |---|---|---|---|
-| `text-embedding-qwen3-embedding-8b` | 300 | **4.29s**（2026-09-20 实测两次 4.285/4.29） | 0.018s（2026-09-20） |
-| `text-reranker-8b` | 300 | **12.48s**（历史最坏 24.27s） | 1.03–1.13s |
-| `vl-reranker-2b` | 300 | **16.27s** | — |
+| `text-embedding-qwen3-embedding-8b` | **0**（常驻） | **4.29s**（2026-09-20 实测两次 4.285/4.29） | 0.018s（2026-09-20） |
+| `vl-reranker-2b` | **0**（常驻） | **16.27s** ← 全栈最慢，故必须常驻 | — |
 | `vl-embedding-2b` | 300 | **12.31s** | 0.02s |
+| （已移除）`text-reranker-8b` | — | 12.48s（历史最坏 24.27s） | 1.03–1.13s |
+| `muse-glimmer-30b` | **900** | **~54s**（2026-09-21 甲-1 实测） | — |
+| `muse-glimmer-30b` | **900** | **~54s**（2026-09-21 甲-1 实测） | — |
 
-**最小的调用方 timeout 是 agent 记忆检索的 15s，硬编码不可配**
-（`DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15e3`，本机定位方法见
-`tools/governance/verify-local-models.ps1` 的注释）。比对冷加载时要拿它当上界，
-而不是拿 skill/MCP 的 180s——
+**最小的调用方 timeout 是 agent 记忆检索的 30s，硬编码不可配**
+（`DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 3e4`；2026-09-21 从已装 openclaw@2026.9.5 的
+`dist/tools-*.mjs` 核实。**旧文档写的 15e3 是更早版本的数字，已作废**）。
+比对冷加载时要拿它当上界，而不是拿 skill/MCP 的 180s——
 `tools/governance/verify-local-models.ps1` 目前只从 skill 层 `rag_client.DEFAULT_TIMEOUT`(180)
-与 mcp 层 `image_retrieval`(300) 取最小值，**覆盖不到这 15s**，改 ttl 时须手工核。
+与 mcp 层 `image_retrieval`(300) 取最小值，**覆盖不到这 30s**，改 ttl 时须手工核。
 
-**Muse Glimmer 30B 不在本表**：它由 8080 的 CUDA 常驻实例提供（无 TTL 卸载），
-llama-swap 里的那份重复登记已于 2026-09-20 移除（显存装不下两份）。
+**Muse Glimmer 30B（2026-09-21 甲-1 起在本表）**：由 llama-swap 托管，`ttl: 900`
+（空闲 15 分钟自卸）。**它不受上面那条 30s 约束** —— 30s 是检索路径（OpenClaw
+记忆检索）的上限，而 30B 的调用方 timeout 都 ≥90s（archlib 打标 90s、
+rag_enhance / ingest 120s）。甲-1 前它在 8080 独立进程里常驻、不归 llama-swap 管；
+那份重复登记曾于 2026-09-20 移除（当时装不下两份）。
 
 **`groups.*.persistent: true` 只防 swap 驱逐，不防空闲 TTL 卸载。** 组 persistent 而成员
 `ttl: 300` 时，5 分钟空闲后首次搜索仍要付 ~12.5s 冷加载。要抹平就把该模型也设 `ttl: 0`
 （代价：常驻显存）。
 
-### 容量不变量：30B 与检索模型不可同时驻留
+### 容量不变量：检索栈可与 30B 同时常驻（2026-09-21 实测重写）
 
-实测（RTX 5090 D，32.6 GB）：30B 常驻 ~22 GB + 两个 8B 检索模型 ~10 GB = **超订**。
-症状：显存 96%、rerank 请求 `TimeoutError`（`rag_client.DEFAULT_TIMEOUT=180s` × 5 次重试
-≈ 15 分钟）→ 上层表现为"检索不可用"（⚠️ agent 记忆检索的 15s 硬上限必然先超时）。
+> **本节此前（含 2026-09-20 版）是估算，结论是错的。** 旧文写"30B ~22GB + 检索 ~10GB =
+> 超订"——检索侧低估近一倍。实测后：检索栈**能**与 30B 共存，前提是把两处配置错误修掉。
 
-**优先级（2026-09-20 定）：向量/检索模型 > 30B。**
+实测（RTX 5090 D，32607 MiB，`%TEMP%\local-model-measure\`）。
+**下表镜像自 `C:\AI\tools\llama-swap\config.yaml` 头部（唯一真相源）**，数字以那里为准：
+
+| 组合 | 占用 | 余量 |
+|---|---|---|
+| A 只 30B | 见权威段 | 见权威段 |
+| B 文本栈 + 30B（**常驻稳态**） | 见权威段 | 见权威段 |
+| C 图文栈 + 30B（archlib 图检） | 见权威段 | 见权威段 |
+| D 三模型共驻 | **不可达**（两个 embed 组 exclusive 互斥） | — |
+
+> **数字不在此处复述** —— 唯一权威是 `C:\AI\tools\llama-swap\config.yaml` 头部【显存账】段，
+> 那里给的是**场景 + 区间**而非孤立数字（整卡读数有 ±50–300 MiB 抖动，单点值必漂）。
+> 本表只保留**结构**：哪几个场景存在、哪个不可达。
+| ~~30B + 两个 8B 检索模型~~ | ~~40.0 GB~~ | 超订 9.1 GB ← **旧配置的真实状态** |
+
+修掉的两处（都不是"模型太多"）：
+1. **`-c` 超配**：text-embedding 开 16384、text-reranker 开 32768，白占约 9.4 GB KV。
+   消费方实际上限是 2048（ChatOS `indexing.contextLength`）。
+2. **`multimodal` 组 `swap: true` 用反**：把 vl-embedding 与 vl-reranker 设成互斥，
+   而图文检索是 embed→rerank 两步 → **每查一次装卸 6 GB 模型**。实测复现过。
+
+**不变量（改配置前必须守住）：**
+
+| 不变量 | 值 | 破了会怎样 |
+| 每槽上下文 | `-c ÷ --parallel`（现 `--parallel 1` → 单槽 32768）；**且 `--parallel` 本身影响显存**（SWA：8槽 21,573 → 2槽 20,652.5 → 1槽 20,432 MiB） | 只看 `-c` 会算错显存，也可能截断（曾 8 槽×4096 装不下打标的 8192） |
+|---|---|---|
+| 检索侧总占用上限 | ≈8.6 GB（32.6 − 30B 22.0 − 桌面 1.8；CUDA 后端） | 超了 rerank `TimeoutError`（`DEFAULT_TIMEOUT=180s` × 5 重试 ≈ 15 分钟）→ 上层"检索不可用" |
+| 客户端并发 | **必须 = `--parallel`**（现为 1） | 多发的请求排队，排队时间叠加到客户端超时上 |
+| max_tokens ↔ 客户端超时 | 必须成对调整（90s ↔ ~11,700 token @130tok/s） | 超时不够时，高出的 max_tokens 额度永远走不到，等于白设 |
+| 文本/图文向量 | 必须互斥（各自组 `exclusive: true`） | 三类检索模型同驻 = 12.3 GB，超上限 |
+| reranker 组 | 必须 `persistent: true` | 被向量组驱逐 → 每次检索多付一次冷加载 |
+| 30B 参数改动 | 同步 **skill 文档**（计划任务只调脚本、不带参数，本身无需改） | 文档与实现漂移，下一轮"优化"会改错地方 |
+
+**装卸方式：**
 
 | 角色 | 装卸方式 | 说明 |
 |---|---|---|
-| 检索模型（embed/rerank） | llama-swap TTL 自动 | 用完 5 分钟自动卸载，无需干预 |
-| 30B（Muse Glimmer） | **手工启停，无 TTL** | 只在打标 / 批量视觉时按需起，用完停 |
+| 文本向量 + reranker | llama-swap `ttl: 0` | 常驻。**为延迟**（vl-reranker-2b 冷加载 16.27s 是全栈最慢），非为避免超时 —— 上限是 30s，冷加载够得着 |
+| 图文向量 | llama-swap `ttl: 300` | 用完自退，好让文本向量回来（两者互斥） |
+| 30B（Muse Glimmer） | 计划任务 `MuseGlimmer`（常驻） | 打标 / 对话 / local-decision 的前提 |
 
-冲突时**通知用户**调度启停：不要自行调度，也不要降级硬跑。
+冲突时**通知用户**：不要自行调度，也不要降级硬跑。
 
 ### 性能测量陷阱：测稳态，别测瞬态
 

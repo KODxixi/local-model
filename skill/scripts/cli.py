@@ -2,7 +2,9 @@
 
 agent 只需调用这一个脚本，通过子命令访问所有功能：
   index / freshness / stats / retrieve / search-image / ingest / chunk /
-  rewrite / summary / embed / rerank / migrate / optimize / doctor
+  rewrite / summary / embed / rerank / doctor
+  （2026-09-21 更正：此前这里还列着 migrate 与 optimize，但两者从未注册进 argparse，
+    `--help` 里也没有 —— 文档与代码同时说谎。）
 
 设计原则：
 - 子命令层级清晰，agent 可预测
@@ -268,6 +270,19 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         all_results: list[RetrievalResult] = []
         skipped: list[dict[str, str]] = []
         for name, kb in registry.items():
+            # 2026-09-21：跨库检索**默认跳过 multimodal 库**。
+            # 根因：multimodal 库的 embed_model 是 vl-embedding-2b，而两个向量组
+            #   `exclusive: true` 互斥 —— 一次 `--kb all` 会驱逐常驻的 text-embedding（6.57 GB），
+            #   全机文本检索进入 12.31s 冷加载窗口，直接吃掉 OpenClaw memory_search
+            #   那个不可配的 30s 硬上限。而 `--kb all` 恰恰是文档推荐用法。
+            # 要图检请显式 `--kb <图文库名>` —— 让"会换向量组"这件事是显式的。
+            if getattr(kb, "type", "text") == "multimodal":
+                skipped.append({
+                    "kb": name,
+                    "error": "multimodal：跨库检索默认跳过（避免驱逐文本向量组）。要图检请显式 --kb "
+                             + name,
+                })
+                continue
             try:
                 retriever = RAGRetriever(kb, db_path=args.db)
                 results = retriever.retrieve(
@@ -552,12 +567,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # 2. 检查 llama-swap embedding 端点 + 当前加载模型
     # 端点不硬编码：embedding 走 rag_client.DEFAULT_BASE_URL（9123），
-    # 对话/视觉端点走 rag_enhance.DEFAULT_LLM_BASE（默认 8080，仅对话/识图）。
+    # 对话/视觉端点走 rag_enhance.DEFAULT_LLM_BASE（默认 9123，仅对话/识图）。
     from rag_client import DEFAULT_BASE_URL
     try:
         from rag_enhance import DEFAULT_LLM_BASE
     except ImportError:
-        DEFAULT_LLM_BASE = "http://127.0.0.1:8080"
+        DEFAULT_LLM_BASE = "http://127.0.0.1:9123"
 
     llama_swap_ok = True
     try:
@@ -738,7 +753,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = _JsonArgumentParser(
         prog="local-rag",
-        description="本地 RAG 系统统一入口：索引、检索、知识图谱、文件解析",
+        description="本地 RAG 系统统一入口：索引、检索、文件解析",
         epilog=(
             "全局参数 --kb/--db/--registry/--json 必须写在子命令之前，例如:\n"
             "  cli.py --kb <kb名> retrieve \"查询\"\n"

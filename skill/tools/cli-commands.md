@@ -43,20 +43,10 @@ cli.py --kb <name> retrieve "查询内容"
 # 跨库检索
 cli.py --kb all retrieve "查询内容"
 
-# 查询扩展（提升召回率）
-cli.py --kb <name> retrieve "查询" --expand
-
-# 多轮上下文消歧
-cli.py --kb <name> retrieve "查询" --context "上一轮对话"
-
-# MMR 多样性重排
-cli.py --kb <name> retrieve "查询" --mmr
-
-# 自动路由（选 semantic/keyword/hybrid）
-cli.py --kb <name> retrieve "查询" --auto-route
-
-# Parent-Child 检索
-cli.py --kb <name> retrieve "查询" --parent-child
+# ⚠️ 上面这一整块（查询扩展 / 上下文消歧 / MMR / 自动路由 / Parent-Child）**全部已不存在**：
+#    --expand / --mmr / --route / --parent-child 在 CLI 里 0 次命中；
+#    --context 也不在 retrieve 上（它挂 rewrite）。
+#    现有诊断 flag 见本节上方 retrieve 的真实清单（--explain / --trace / --no-rerank / --path-filter）。
 ```
 
 ### ingest
@@ -96,18 +86,18 @@ cli.py --kb <name> search-image <图片路径>
 cli.py --kb <name> freshness
 ```
 
-### optimize
+### optimize（注意：是 `vector_store.py` 的子命令，不是 `cli.py` 的）
 优化索引（重建 FTS 索引等）。
 
 ```bash
-cli.py --kb <name> optimize
+python scripts/vector_store.py optimize --db <db> --kb <kb>
 ```
 
-### migrate
+### migrate（同上，`vector_store.py` 的子命令）
 旧 SQLite 索引迁移到 LanceDB。
 
 ```bash
-cli.py --kb <name> migrate
+python scripts/vector_store.py migrate --sqlite <path> --db <db> --kb <kb>
 ```
 
 ### stats
@@ -117,62 +107,38 @@ cli.py --kb <name> migrate
 cli.py --kb <name> stats
 ```
 
-## 知识图谱命令
+## 已砍掉的命令（不要再教）
 
-### kg extract
-从已索引内容提取知识图谱。
+> **`kg extract/find/related/list/stats/visualize` 已从 CLI 移除**（2026-09-21 核实。
+> `AGENTS.md` 的负面指针也确认「kg 命令已砍掉」）。
+> `index --extract-entities` 仍会把实体抽出来，但**读取端不存在** —— 只写不读。
 
-```bash
-cli.py --kb <name> kg extract
-```
-
-### kg find
-按实体/关系查询知识图谱。
+要诊断检索为什么没命中，用 `retrieve` 的真实 flag：
 
 ```bash
-cli.py --kb <name> kg find "实体名"
-```
-
-### kg related
-查相关实体。
-
-```bash
-cli.py --kb <name> kg related "实体名"
-```
-
-### kg list
-列出所有实体。
-
-```bash
-cli.py --kb <name> kg list
-```
-
-### kg stats
-知识图谱统计。
-
-```bash
-cli.py --kb <name> kg stats
+cli.py --kb <name> retrieve "查询" --explain          # 每条的四路分数（语义/关键词/RRF/rerank）
+cli.py --kb <name> retrieve "查询" --trace out.html   # 检索推理链可视化
+cli.py --kb <name> retrieve "查询" --no-rerank         # 跳过精排，只看召回
 ```
 
 ## Muse Glimmer 管理
 
-### muse status
-查看 30B 状态。
+> ⚠️ **不存在 `muse.py`**（2026-09-21 核实）。此前本文件教的 `muse status/start/stop`
+> 指向一个早已删除的脚本，照跑必然 `No such file`。
 
-```bash
-python scripts/muse.py status
-```
+真实管理方式（完整契约见 `C:\AI\memory\_canonical\LOCAL-MODELS.md` 第三节）：
 
-### muse start
-启动 30B。
+```powershell
+# 2026-09-21 甲-1：30B 由 llama-swap 托管，**不再手工起独立实例**。
+# 首个请求自动 spawn（冷加载实测 ~54s）；ttl: 900 空闲自卸。
 
-```bash
-python scripts/muse.py start
-```
+# 查活体（只读，不触发加载）
+curl http://127.0.0.1:9123/running                          # 已加载项 + state + ttl
+curl http://127.0.0.1:9123/upstream/muse-glimmer-30b/health # {"status":"ok"}
 
-### muse stop
-停止 30B。
+# 卸载 / 改完 config.yaml 后重载
+curl -X POST http://127.0.0.1:9123/api/models/unload/muse-glimmer-30b
+schtasks /End /TN LlamaSwap; schtasks /Run /TN LlamaSwap
 
-```bash
-python scripts/muse.py stop
+# ⚠️ 计划任务 MuseGlimmer 已 Disabled —— 启用会起第二个 30B，直接 OOM
 ```

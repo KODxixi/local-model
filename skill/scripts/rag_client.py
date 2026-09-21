@@ -26,7 +26,11 @@ DEFAULT_BASE_URL = os.getenv("LOCAL_RAG_BASE_URL", "http://127.0.0.1:9123")
 DEFAULT_EMBED_URL = f"{DEFAULT_BASE_URL}/v1/embeddings"
 DEFAULT_RERANK_URL = f"{DEFAULT_BASE_URL}/v1/rerank"
 DEFAULT_TEXT_EMBED_MODEL = "text-embedding-qwen3-embedding-8b"
-DEFAULT_TEXT_RERANK_MODEL = "text-reranker-8b"
+# 2026-09-21：原为 "text-reranker-8b"，该模型已从 llama-swap 摘除（与常驻 30B 算术冲突），
+# 改由 vl-reranker-2b 兼任文本精排。**这是共享默认值** —— rag_retriever 的默认参数、
+# cli.py 构造 RAGRetriever 时（不传 rerank_model）、本模块 CLI 的 --model 都走它，
+# 改回旧名字会让 `cli.py retrieve` 的 rerank 步骤拿到 404（实测 "no router for requested model"）。
+DEFAULT_TEXT_RERANK_MODEL = "vl-reranker-2b"
 DEFAULT_VL_EMBED_MODEL = "vl-embedding-2b"
 DEFAULT_VL_RERANK_MODEL = "vl-reranker-2b"
 

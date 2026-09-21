@@ -326,7 +326,7 @@ class RAGRetriever:
                     smart_weights=smart_weights,
                 )
 
-        # P4-2: 查询扩展（对话端点默认 8080，默认关闭；失败降级为单查询）
+        # P4-2: 查询扩展（对话模型默认走 9123 的 muse-glimmer-30b，默认关闭；失败降级为单查询）
         expanded_queries_meta: list[str] = []
         expand_queries = [active_query]
         if expand_query and mode != "keyword":
@@ -642,9 +642,9 @@ class RAGRetriever:
     # P4-2: 查询扩展（Query Expansion）
     # ------------------------------------------------------------------
     def _expand_query(self, query: str, num_expansions: int = 2) -> list[str]:
-        """用对话端点（默认 8080）生成同义改写子查询，提升召回率。
+        """用对话模型（默认走 9123 的 muse-glimmer-30b）生成同义改写子查询，提升召回率。
 
-        失败（对话端点不可用 / rewrite_query 抛异常）时降级为仅原查询。
+        失败（对话模型不可用 / rewrite_query 抛异常）时降级为仅原查询。
         返回 [原查询] + 最多 num_expansions 个子查询。
         """
         if not _HAS_ENHANCE:
@@ -853,9 +853,9 @@ class RAGRetriever:
         explain = {
             "source": r.get("_source", "unknown"),  # semantic / keyword / hybrid
             "ranked_by": r.get("ranked_by", "embedding"),
-            "semantic_score": r.get("_rrf_sem", None),
-            "keyword_score": r.get("_rrf_keyword", None),
-            "rrf_score": r.get("_sort_score", None),
+            "semantic_score": r.get("_rrf_sem"),
+            "keyword_score": r.get("_rrf_keyword"),
+            "rrf_score": r.get("_sort_score"),
             "rerank_score": float(r.get("score", 0)) if r.get("ranked_by") == "rerank" else None,
         }
         # 去掉 None 值

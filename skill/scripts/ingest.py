@@ -43,8 +43,13 @@ SYSTEM_DIR = SKILL_ROOT / "system"
 
 
 def load_prompt(name: str) -> tuple[str, str]:
-    """从 system/*.md 加载 prompt，返回 (system, user)。
+    """从 system/<name>-prompt.md 加载 prompt，返回 (system, user)。
 
+    命名约定是 ``<name>-prompt.md``（见 AGENTS.md「Prompt 正文」表）：
+    逻辑名 ``query-rewrite`` → ``system/query-rewrite-prompt.md``。
+    2026-09-21 修复：此前拼的是 ``<name>.md``，三个 prompt 全部加载为空
+    且静默返回 —— 查询改写降级、摘要无提示词、PDF-OCR 空提示词都不报错。
+    现在文件缺失会打到 stderr。
     文件格式：
     ## system
     system prompt 内容
@@ -52,8 +57,12 @@ def load_prompt(name: str) -> tuple[str, str]:
     ## user
     user prompt 内容
     """
-    prompt_file = SYSTEM_DIR / f"{name}.md"
+    prompt_file = SYSTEM_DIR / f"{name}-prompt.md"
     if not prompt_file.exists():
+        print(
+            f"[{__name__}] 缺少 prompt 文件 {prompt_file} —— 该能力会退化成空提示词",
+            file=sys.stderr,
+        )
         return "", ""
 
     content = prompt_file.read_text(encoding="utf-8")
@@ -116,7 +125,8 @@ class Document:
 # ---------------------------------------------------------------------------
 
 # 可用环境变量 LOCAL_RAG_VLM_BASE_URL 覆盖
-VLM_BASE_URL = os.getenv("LOCAL_RAG_VLM_BASE_URL", "http://127.0.0.1:8080")
+# 2026-09-21 甲-1：30B 已从 8080 独立进程迁入 llama-swap，8080 退役。
+VLM_BASE_URL = os.getenv("LOCAL_RAG_VLM_BASE_URL", "http://127.0.0.1:9123")
 # 模型名通过环境变量配置，不写死本机路径
 VLM_MODEL = os.getenv("LOCAL_RAG_VLM_MODEL", "muse-glimmer-30b")
 VLM_TIMEOUT = 120  # 秒，冷加载可能慢

@@ -18,13 +18,14 @@ text_backend:
     dimensions: 4096
   rerank:
     base_url: http://127.0.0.1:9123
-    model: text-reranker-8b
+    model: vl-reranker-2b
 
 # 视觉/对话后端（用于图片理解 / PDF 扫描页 / 查询改写 / 摘要）
 # 通过环境变量配置，不写死本机路径：
 #   LOCAL_RAG_VLM_BASE_URL / LOCAL_RAG_VLM_MODEL  (ingest.py VLM)
 #   LOCAL_RAG_LLM_BASE / LOCAL_RAG_LLM_MODEL       (rag_enhance.py 对话)
-# 默认走 http://127.0.0.1:8080 (Muse Glimmer 30B + Vision)
+# 默认走 http://127.0.0.1:9123 (Muse Glimmer 30B + Vision)
+# 2026-09-21 甲-1：30B 与检索同入口（llama-swap 管全部 4 个模型），8080 退役。
 
 # 向量存储
 vector_store:
@@ -36,7 +37,7 @@ performance:
   embed_batch_size: 64       # 文本 embedding 批大小（实测 64 是甜点 35 docs/s）
   image_batch_size: 64       # 图片 embedding 批大小
   rerank_recall_size: 24     # rerank 候选数（24 篇 × 0.36s ≈ 9s）
-  warmup_on_index: true      # 索引前发送小请求触发 Vulkan shader 编译
+  warmup_on_index: true      # 索引前发送小请求触发模型预热（2026-09-21 起为 CUDA，非 Vulkan shader 编译）
 
 # 旧 SQLite 索引已于 2026-09-20 删除（LanceDB 迁移早已完成，无代码读此路径）。
 # `cli.py migrate --sqlite <path>` 仍需显式传路径，故不再保留默认键。

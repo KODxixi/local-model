@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = pytest.mark.skip(reason="e2e 需要真实模型服务")
 from conftest import requires_llama_swap
 from rag_indexer import KBConfig, RAGIndexer

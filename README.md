@@ -1,4 +1,4 @@
-﻿# local-models-mcp
+# local-models-mcp
 
 本地多模态 RAG 系统。MCP 做原子工具层，Skill 做 RAG 编排层。全链路本地运行，所有模型跑在 GPU 上。
 
@@ -34,8 +34,8 @@ flowchart TB
     end
 
     subgraph MODELS["本地模型服务（GPU）"]
-        LS["llama-swap 127.0.0.1:9123<br/>Vulkan llama.cpp · TTL 自动装卸<br/>text-embedding-qwen3-embedding-8b 4096<br/>text-reranker-8b<br/>vl-embedding-2b 2048<br/>vl-reranker-2b"]
-        MG["Muse Glimmer 127.0.0.1:8080<br/>CUDA + DFlash + Vision<br/>对话 / OCR / 视觉理解"]
+        LS["llama-swap 127.0.0.1:9123<br/>CUDA llama.cpp · TTL 自动装卸<br/>text-embedding-qwen3-embedding-8b 4096<br/>vl-embedding-2b 2048<br/>vl-reranker-2b（文本+图文共用）"]
+        MG["Muse Glimmer（同入口 9123）<br/>CUDA + DFlash + Vision<br/>对话 / OCR / 视觉理解<br/>muse-glimmer-30b · ttl 900"]
     end
 
     IN --> SKILL
@@ -60,16 +60,15 @@ flowchart TB
 
 | 用途 | 模型 | 维度 | 后端 | GPU |
 |---|---|---|---|---|
-| **文字向量** | text-embedding-qwen3-embedding-8b (Q4_K_M) | 4096 | llama-swap 9123 | Vulkan, -ngl 99 |
-| **图向量** | vl-embedding-2b | 2048 | llama-swap 9123 | Vulkan, -ngl 99 |
-| **文本精排** | text-reranker-8b | - | llama-swap 9123 | Vulkan, -ngl 99 |
-| **图文精排** | vl-reranker-2b | - | llama-swap 9123 | Vulkan, -ngl 99 |
-| **视觉理解** | Muse-Glimmer-30B-Q4_K_M + mmproj | - | Muse Glimmer 8080 | CUDA, --gpu-layers 99 |
-| **对话/改写** | Muse-Glimmer-30B-Q4_K_M + DFlash | - | Muse Glimmer 8080 | CUDA + DFlash, --gpu-layers 99 |
+| **文字向量** | text-embedding-qwen3-embedding-8b (Q4_K_M) | 4096 | llama-swap 9123 | CUDA, --gpu-layers 99 |
+| **图向量** | vl-embedding-2b | 2048 | llama-swap 9123 | CUDA, --gpu-layers 99 |
+| **文本/图文精排** | vl-reranker-2b（共用） | - | llama-swap 9123 | CUDA, --gpu-layers 99 |
+| **视觉理解** | Muse-Glimmer-30B-Q4_K_M + mmproj | - | llama-swap 9123 | CUDA, --gpu-layers 99 |
+| **对话/改写** | Muse-Glimmer-30B-Q4_K_M + DFlash | - | llama-swap 9123 | CUDA + DFlash, --gpu-layers 99 |
 
 **选型理由：**
-- 检索模型（embedding/rerank）走 llama-swap：Vulkan 版 llama.cpp，TTL 自动装卸，4个模型共享一套基础设施
-- 视觉/对话走 Muse Glimmer 8080：CUDA 13.3 + DFlash 投机解码，128K 上下文，125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR
+- 检索模型（embedding/rerank）走 llama-swap：CUDA 版 llama.cpp（2026-09-21 由 Vulkan 切换），TTL 自动装卸，4个模型共享一套基础设施
+- 视觉/对话走同一入口的 `muse-glimmer-30b`（2026-09-21 甲-1 由 8080 独立进程迁入）：CUDA 13.3 + DFlash 投机解码，**16K** 上下文（单槽 `--parallel 1`，与检索栈共存所需），125-220 tok/s，同时做 OCR、描述、分类、对话，不需要 PaddleOCR
 - 所有模型全层 GPU（`--gpu-layers 99`），不走 CPU
 
 ## 数据库 / 向量库
@@ -137,17 +136,17 @@ flowchart TB
 - 临时文件 `~/.local-rag/tmp/` 可随时删除（不影响索引）
 
 **迁移流程：**
-- 旧 SQLite → LanceDB：`cli.py --kb <name> migrate`（从旧 SQLite 索引读取 chunks 重新写入 LanceDB）
+- 索引重建：`cli.py --kb <name> index --force`（`migrate` 子命令不存在，2026-09-21 核实）
 - 维度变更：需要全量重建 `cli.py --kb <name> index --force`（向量维度不可原地修改）
 - 模型变更：embed_model 改变时必须 `--force` 重建，否则向量空间不兼容
 
 **损坏恢复：**
 - LanceDB 表损坏：删除对应 `.lance/` 目录后 `--force` 重建
-- FTS 索引损坏：`cli.py --kb <name> optimize`（重建索引），或删除表后重建
+- FTS 索引损坏：`cli.py --kb <name> index --force`（全量重建），或删除表后重建（`optimize` 子命令不存在）
 - 并发写入冲突：索引操作有 PID 文件锁，冲突时等待或杀掉旧进程
 
 **版本管理：**
-- LanceDB 版本升级后可能需要 `optimize` 重组数据文件
+- LanceDB 版本升级后可能需要全量重建（`index --force`）
 - registry.yaml 中的 `dimensions` 和 `embed_model` 是索引版本的关键标识，变更即需重建
 
 ### RAG 库文件夹结构（知识库组织规范）
@@ -194,7 +193,6 @@ flowchart TB
     │
     ├──▶ 上下文消歧（可选 --context）: 用上一轮对话消歧代词/省略
     │
-    ├──▶ 查询扩展（可选 --expand）: LLM 生成 2-3 个同义改写，多查询召回
     │
     ├──▶ Qwen 查询指令（默认启用）: 查询侧加前缀 "Instruct: ...\nQuery: "
     │     └── 文档侧不变，不重建向量；可回退 retrieve(use_query_instruction=False)
@@ -211,7 +209,7 @@ RRF 融合（Reciprocal Rank Fusion）: 语义/关键词分别排名，融合分
 稳定去重（chunk_id 优先，缺失用 path+完整内容 sha256 前16位）
     │
     ▼
-rerank 精排: text-reranker-8b (cross-encoder) → recall_size=24 篇
+rerank 精排: vl-reranker-2b (cross-encoder) → recall_size=24 篇
     │
     ▼
 MMR 多样性重排（可选）: 避免返回结果高度相似
@@ -226,10 +224,11 @@ agent 友好格式: [序号] 标题路径 (score=0.85, rerank) + source + 完整
 - `hybrid` — 混合检索 + RRF 融合（默认）
 
 **高级选项：**
-- `--expand` — 查询扩展（对话端点生成同义改写，提升召回率，增加延迟）
+- `--explain` — 显示每条结果的四路分数（语义相似度 / 关键词匹配 / RRF 融合 / rerank 分数）
 - `--context "上一轮对话"` — 多轮上下文消歧（零延迟规则引擎，代词→实体）
 - `--mode parent-child` — Parent-Child 检索（chunk 检索后返回父文档上下文）
-- `--mmr` — MMR 多样性重排
+- `--trace out.html` — 生成检索推理链可视化
+- `--no-rerank` — 跳过精排，只看纯召回排序
 - `--route` — 查询路由（自动选 semantic/keyword/hybrid）
 - `path_filter` — 路径包含过滤（服务端预过滤，不依赖取数上限）
 - `doc_type_filter` — 文档类型过滤
@@ -254,10 +253,8 @@ agent 友好格式: [序号] 标题路径 (score=0.85, rerank) + source + 完整
 ### 知识图谱补充
 
 向量检索找"语义相似"，知识图谱找"实体关联"：
-- `kg extract <file>` — 从文件提取实体（LLM + 规则双路）
-- `kg find "LanceDB"` — 找提到某实体的文档
-- `kg related "Python"` — 找共现实体
-- `kg list --type tech` — 按类型列出实体
+> ⚠️ `kg *` 系列命令**已砍掉**（2026-09-21 核实：`cli.py --help` 里没有）。
+> 实体仍会在 `index --extract-entities` 时被抽出，但**读取端已不存在**。
 
 ## PDF 入库策略
 
@@ -326,13 +323,12 @@ llama-swap 不可用时可能降级到其他 embedding 后端（如其他后端 
 | `ModuleNotFoundError: lancedb` | 依赖没装或用的是系统 Python。跑 `setup.ps1`，或用 `skill\.venv\Scripts\python.exe` |
 | `向量维度不匹配: 表定义 4096 维, 实际输入 768 维` | 端点指向了别的 embedding 模型（降级链或改错端口）。核对 `registry.yaml` 的 `embed_model` / `dimensions` 与端点 |
 | `unknown kb 'xxx'` / `E_INVALID_ARGS` | 库没注册或 `--kb` 写在了子命令之后。全局参数必须写在子命令**之前** |
-| 关键词检索返回空 | 确认 LanceDB 表有 INVERTED FTS 索引，跑 `cli.py --kb <name> optimize` 重建 |
+| 关键词检索返回空 | 确认 LanceDB 表有 INVERTED FTS 索引，跑 `cli.py --kb <name> index --force` 重建 |
 | 语义检索排序异常 | 确认代码是最新的（L2 距离越低越相似，排序方向修过一次） |
-| 结果高度相似 | 加 `--mmr` 启用 MMR 多样性重排 |
-| 短查询召回低 | 加 `--expand` 启用查询扩展 |
+| 结果高度相似 | 用 `--mode semantic` 或调小 `--top-k`（`--mmr` 已不存在） |
+| 短查询召回低 | 用 `--explain` 看是哪一路没召回（`--expand` 已不存在） |
 | 代词查询（"它"/"这个"）效果差 | 加 `--context "上一轮对话"` 启用上下文消歧 |
 | `另一个索引进程正在运行 (PID=…)` | 索引有 PID 文件锁；确认无进程后删 `~/.local-rag/index.lock` |
-| `kg visualize` 生成的页面无图 | 该页面从 CDN 加载 vis-network，离线时会提示而不是白屏；联网后重开即可 |
 
 ## 已知限制
 
@@ -410,17 +406,14 @@ skill\.venv\Scripts\python.exe skill\scripts\cli.py --kb my_docs freshness
 | `index` | 增量建索引（支持 `--force` 全量重建、`--extract-entities` 知识图谱） |
 | `freshness` | 检查索引新鲜度（非零退出码=过期） |
 | `stats` | 查看索引统计（chunk数、文件数、文档类型分布） |
-| `retrieve` | 混合检索 + rerank（支持 `--kb all` 跨库、`--mode semantic/keyword/hybrid/parent-child`、`--expand` 查询扩展、`--context` 上下文消歧、`--mmr` 多样性、`--route` 自动路由） |
+| `retrieve` | 混合检索 + rerank（真实 flag：`--kb all` 跨库、`--mode hybrid/semantic/keyword`、`--top-k`、`--no-rerank`、`--path-filter`、`--explain` 分数、`--trace out.html` 推理链） |
 | `search-image` | 以图搜图（vl-embedding-2b 向量检索） |
-| `kg extract/find/related/list/stats` | 知识图谱操作 |
 | `ingest` | 解析单个文件（调试用，`--json` 输出结构化 Document） |
 | `chunk` | 智能分块（调试用） |
 | `rewrite` | 查询改写（LLM 扩展同义词+拆解复合查询） |
 | `summary` | 文档摘要（标题+摘要+标签+实体） |
 | `embed` | 直接调用 embedding（调试用） |
 | `rerank` | 直接调用 rerank（调试用） |
-| `migrate` | 从旧 SQLite 索引迁移到 LanceDB |
-| `optimize` | 优化 LanceDB 表（`Table.optimize()` + ANN 索引重建） |
 | `doctor` | 系统诊断（依赖状态+GPU状态+模型可用性+索引覆盖+过期库） |
 
 ## 知识库注册表
@@ -462,8 +455,8 @@ knowledge_bases:
 | 环境变量 | 作用 | 默认 |
 |---|---|---|
 | `LOCAL_RAG_BASE_URL` | embed / rerank 端点（llama-swap） | `http://127.0.0.1:9123` |
-| `LOCAL_RAG_VLM_BASE_URL` | 图片 / PDF 扫描页的 VLM 端点 | `http://127.0.0.1:8080` |
-| `LOCAL_RAG_LLM_BASE` | 查询改写 / 摘要的 LLM 端点 | `http://127.0.0.1:8080` |
+| `LOCAL_RAG_VLM_BASE_URL` | 图片 / PDF 扫描页的 VLM 端点 | `http://127.0.0.1:9123`（模型由 `model` 字段选） |
+| `LOCAL_RAG_LLM_BASE` | 查询改写 / 摘要的 LLM 端点 | `http://127.0.0.1:9123`（同上） |
 
 ## 外部项目集成
 
@@ -512,8 +505,12 @@ results = rerank_texts("query", ["doc1", "doc2"], top_k=5)
 
 所有模型默认跑在 GPU 上（RTX 5090 D 32GB）：
 
-- **llama-swap 9123**：Vulkan llama.cpp，`-ngl 99`（全层），4个检索模型，TTL 300s 自动卸载
-- **Muse Glimmer 8080**：CUDA 13.3 + DFlash 投机解码 + Vision，128K 上下文，125-220 tok/s，视觉理解 + 对话生成
+- **llama-swap 9123**：CUDA llama.cpp（2026-09-21 由 Vulkan 切换），`--gpu-layers 99 -b4096 -ub4096 -fa on`，3 个检索模型，TTL 按需装卸
+  （模型清单与 TTL 的真相源是 `C:\AI\tools\llama-swap\config.yaml`；本文件是概览）
+  （文本向量与共用 reranker `ttl: 0` 常驻；图文向量 `ttl: 300`）
+- **Muse Glimmer（同入口 9123）**：CUDA 13.3 + DFlash 投机解码 + Vision，16K 上下文（单槽），
+  125-220 tok/s，视觉理解 + 对话生成。由 llama-swap 托管，`ttl: 900` 空闲自卸
+  （2026-09-21 甲-1 由 8080 独立进程迁入；旧计划任务 `MuseGlimmer` 已 Disabled）
 
 ### Muse Glimmer 30B + DFlash（对话/Agent 主模型）
 
@@ -531,12 +528,16 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
     --spec-type draft-dflash `
     --spec-draft-model "$MuseDir\dflash-Muse-Glimmer-30B-Q4_K_M.gguf" `
     --spec-draft-n-max 10 `
-    -fa on -c 131072 --threads 20 `
-    --port 8080 --host 127.0.0.1
+    -fa on -c 16384 --threads 20 --parallel 1 `
+    --port 8099 --host 127.0.0.1
 ```
 
+> ⚠️ **2026-09-21 甲-1**：30B 已由 llama-swap 托管，上面这条只用于前台调试。
+> 别用 `8080`（退役的旧独立实例端口）—— 起出第二个 30B 会直接 OOM。
+
 **性能指标（实测）：**
-- 上下文：131,072 tokens（128K 原生最大）
+- 上下文：**16,384**（`--parallel 1`，单槽即全量）。`n_ctx_train` 131,072，但 128K 全开与检索栈共存会超订；
+  2026-09-21 甲-1 由 32,768 降到 16,384 以便与检索栈共存（拾回 ~0.9 GB）
 - 生成速度：**125-220 tok/s**（DFlash 投机解码）
 - GPU 显存：22-30 GB / 32.6 GB
 - **能力：文本对话 + 视觉理解（Vision）+ 工具调用（Tool use）**
@@ -551,7 +552,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
   - `nvblas64_13.dll`
 
 **API 调用：**
-- OpenAI 兼容：`http://127.0.0.1:8080/v1/chat/completions`
+- OpenAI 兼容：`http://127.0.0.1:9123/v1/chat/completions`（`model: muse-glimmer-30b`）
 - model 参数：主模型完整路径
 
 ### Agent 调用推荐配置（杂活 + 代码 + 长上下文）
@@ -560,8 +561,8 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 
 | 参数 | 值 | 理由 |
 |------|-----|------|
-| 上下文 | 131,072 (128K) | 代码仓库大，必须拉满 |
-| max_tokens | 16,384 (16K) | 平衡：比 32K 快，比 4K 够长 |
+| 上下文 | 16,384（单槽） | 再大就与检索栈冲突；长文档靠 rerank 裁剪 |
+| max_tokens | **8,192** | 甲-1 后上下文 16384，须给提示词留空间。llama-server 对超限**静默钳位**，写 16384 等于白设 |
 | temperature | 0.5 | 平衡：代码要准确，杂活要灵活 |
 | top_p | 0.9 | 配合低 temperature 更稳定 |
 | DFlash n_max | 10 | 平衡速度和准确性（原 15 偏高） |
@@ -571,7 +572,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 {
     "model": "<MODELS_DIR>\\Muse\\Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
     "messages": [{"role": "user", "content": "重构这段代码..."}],
-    "max_tokens": 16384,
+    "max_tokens": 8192,
     "temperature": 0.5,
     "top_p": 0.9
 }
@@ -579,16 +580,16 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 
 **性能指标（实测）：**
 - 生成速度：**125-220 tok/s**（DFlash 投机解码）
-- 128K 上下文：模型可读取整个代码仓库
+- 16K 上下文（单槽）：够读单模块；跨仓库检索走 9123 的向量检索而非全塞上下文
 - 推理模型：先生成 reasoning_content，再生成 content
 
 用 `cli.py doctor` 一键确认 GPU 型号、驱动、利用率、显存占用和当前加载模型。
 
 ## 红线
 
-1. embed/rerank **永远只走 llama-swap 9123**；Muse Glimmer 8080 **只跑对话/视觉理解**
-2. 禁止把 `text-embedding-*` / `*-reranker-*` load 进 Muse Glimmer 8080
-3. 检索不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点到 Muse Glimmer 应急
+1. 4 个模型**都走 llama-swap 9123**；按模型 id 区分用途 —— 检索模型与 `muse-glimmer-30b` 不得混用
+2. 禁止把 `text-embedding-*` / `*-reranker-*` 塞进对话路径，反之亦然
+3. 检索不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点应急
 4. 索引是**可再生投影**，真相源是原始文件；永不反向写
 5. 不读取、输出或改写凭据；不扫描 private 目录
 
@@ -611,7 +612,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 │   │   └── full-workflow.md     # 底层实现参考（配置陷阱/冷加载/Vulkan vs CUDA）
 │   ├── scripts/
 │   │   ├── __init__.py          # 公共 API（外部项目可直接 import）
-│   │   ├── cli.py               # 统一入口（15 个顶层子命令，kg 含 5 叶子，共 19 叶子命令）
+│   │   ├── cli.py               # 统一入口（12 个顶层子命令，无叶子子命令）
 │   │   ├── ingest.py            # 文件解析（PDF WebP+HTML重组/VLM/全格式）
 │   │   ├── chunker.py           # 智能分块（按标题/段落）
 │   │   ├── rag_indexer.py       # 索引编排（增量+新鲜度+KG+图向量）

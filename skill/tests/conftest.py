@@ -48,9 +48,9 @@ def llama_swap_available() -> bool:
     return _http_get_ok("http://127.0.0.1:9123/v1/models")
 
 
-def lm_studio_available() -> bool:
-    """对话/视觉端点 (VLM/chat, 8080) 是否在线。"""
-    return _http_get_ok("http://127.0.0.1:8080/v1/models")
+def muse_available() -> bool:
+    """对话/视觉端点 (Muse Glimmer 30B via llama-swap, 9123) 是否在线。"""
+    return _http_get_ok("http://127.0.0.1:9123/v1/models")
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +62,11 @@ import pytest  # noqa: E402
 # 这两个 decorator 只是打标记，**不加 skipif 条件**——条件在 collect 之后由
 # pytest_collection_modifyitems 惰性判定，避免模块级（collect 阶段）联网。
 requires_llama_swap = pytest.mark.requires_llama_swap
-requires_lm_studio = pytest.mark.requires_lm_studio
+requires_muse = pytest.mark.requires_muse
 
 _SERVICE_PROBES = {
     "requires_llama_swap": ("llama-swap 未运行 (http://127.0.0.1:9123)", llama_swap_available),
-    "requires_lm_studio": ("对话/视觉端点 未运行 (http://127.0.0.1:8080)", lm_studio_available),
+    "requires_muse": ("对话/视觉端点 未运行 (http://127.0.0.1:9123)", muse_available),
 }
 
 

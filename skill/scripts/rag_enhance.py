@@ -32,9 +32,19 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 
 def load_prompt(name: str) -> tuple[str, str]:
-    """从 system/*.md 加载 prompt，返回 (system, user)。"""
-    prompt_file = SYSTEM_DIR / f"{name}.md"
+    """从 system/<name>-prompt.md 加载 prompt，返回 (system, user)。
+
+    命名约定是 ``<name>-prompt.md``（见 AGENTS.md「Prompt 正文」表）：
+    逻辑名 ``query-rewrite`` → ``system/query-rewrite-prompt.md``。
+    2026-09-21 修复：此前拼的是 ``<name>.md``，三个 prompt 全部加载为空
+    且静默返回 —— 查询改写降级、摘要无提示词、PDF-OCR 空提示词都不报错。
+    现在文件缺失会打到 stderr。"""
+    prompt_file = SYSTEM_DIR / f"{name}-prompt.md"
     if not prompt_file.exists():
+        print(
+            f"[{__name__}] 缺少 prompt 文件 {prompt_file} —— 该能力会退化成空提示词",
+            file=sys.stderr,
+        )
         return "", ""
 
     content = prompt_file.read_text(encoding="utf-8")
@@ -53,7 +63,8 @@ def load_prompt(name: str) -> tuple[str, str]:
 
 # 对话模型（用于生成式任务；红线：只跑对话/识图，不跑 embed/rerank）
 # 可用环境变量 LOCAL_RAG_LLM_BASE 覆盖
-DEFAULT_LLM_BASE = os.getenv("LOCAL_RAG_LLM_BASE", "http://127.0.0.1:8080")
+# 2026-09-21 甲-1：30B 已迁入 llama-swap（9123），8080 退役。
+DEFAULT_LLM_BASE = os.getenv("LOCAL_RAG_LLM_BASE", "http://127.0.0.1:9123")
 # 模型名通过环境变量配置，不写死本机路径
 DEFAULT_LLM_MODEL = os.getenv("LOCAL_RAG_LLM_MODEL", "muse-glimmer-30b")
 DEFAULT_TIMEOUT = 120
@@ -65,8 +76,12 @@ _LLM_RETRY_BACKOFF = 2.0
 _LLM_RETRY_MAX_DELAY = 30.0
 
 # 生成式任务默认参数
-REWRITE_MAX_TOKENS = 512          # 查询改写单次输出上限
-SUMMARY_MAX_TOKENS = 512          # 文档摘要单次输出上限
+# 2026-09-21：由 512 抬到 4096。512 会把 JSON 截断（实测 finish_reason=length），
+#   而 30B 是先烧 reasoning 再出 content 的推理模型（reasoning 实测 ~1.1-1.4k token）。
+#   本项即 SKILL.md「max_tokens ≥4096 起步」那条自定规则 —— 代码此前违反了它。
+#   max_tokens 只是上限、不预占上下文，抬高零代价。
+REWRITE_MAX_TOKENS = 4096         # 查询改写单次输出上限
+SUMMARY_MAX_TOKENS = 4096         # 文档摘要单次输出上限
 SUMMARY_MAX_CONTENT_CHARS = 4000  # 送入摘要 LLM 的最大正文字符数
 MAX_SUB_QUERIES = 3               # 多查询检索最多并发子查询数
 #: 生成式任务采样温度（抽取/改写类任务要求稳定输出）
@@ -82,7 +97,8 @@ def _llm_chat(
     base_url: str = DEFAULT_LLM_BASE,
     model: str = DEFAULT_LLM_MODEL,
     temperature: float = 0.3,
-    max_tokens: int = 1024,
+    max_tokens: int = 4096,      # 下限见 SKILL.md：推理模型 <4096 会截断 content
+    reasoning_effort: str = "low",
     timeout: int = DEFAULT_TIMEOUT,
 ) -> str:
     """调用本地 LLM（OpenAI-compatible API）。
@@ -96,6 +112,9 @@ def _llm_chat(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # 本机 llama-server 实测支持：reasoning 减半（1085B→493B），content 不变。
+        # 依据 SKILL.md「同时给本地路径加 reasoning_effort: low」。
+        "reasoning_effort": reasoning_effort,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 

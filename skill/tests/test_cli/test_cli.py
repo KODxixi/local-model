@@ -91,16 +91,22 @@ def test_each_command_parses(cmd: str):
 # ---------------------------------------------------------------------------
 
 def _fake_urlopen_factory():
-    """按 URL 返回不同 JSON 的 urlopen mock。"""
+    """按 URL 返回不同 JSON 的 urlopen mock。
+
+    2026-09-21 甲-1：doctor 的检索探针与对话/视觉探针现在**都打 9123 的 /v1/models**
+    （对话侧此前是 8080，已退役），同一 URL 无法再按端口区分，故返回全量模型列表。
+    """
     def fake_urlopen(req, timeout=5):
         url = req.full_url
         body = b'{"data": []}'
-        if "/v1/models" in url and "9123" in url:
-            body = json.dumps({"data": [{"id": "text-embed"}, {"id": "text-rerank"}]})
+        if "/v1/models" in url:
+            body = json.dumps({"data": [
+                {"id": "text-embedding-qwen3-embedding-8b"},
+                {"id": "vl-reranker-2b"},
+                {"id": "muse-glimmer-30b"},
+            ]})
         elif "/running" in url:
-            body = json.dumps(["text-embed"])
-        elif "/v1/models" in url and "8080" in url:
-            body = json.dumps({"data": [{"id": "qwen-vl"}]})
+            body = json.dumps(["text-embedding-qwen3-embedding-8b"])
         cm = MagicMock()
         cm.__enter__ = MagicMock(return_value=cm)
         cm.__exit__ = MagicMock(return_value=False)
