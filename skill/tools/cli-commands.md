@@ -1,144 +1,46 @@
-# CLI 命令清单
+# CLI 命令与状态查询
 
-> 真相源：`scripts/cli.py`
+命令真相源：[scripts/cli.py](../scripts/cli.py)。解释器、安装与完整调用方式见 [SKILL.md](../SKILL.md)。
+以下以 `cli.py` 简写已选解释器加脚本绝对路径；不得把简写直接当系统命令。
 
-## 全局参数
+## 参数与选库
 
-| 参数 | 说明 |
-|------|------|
-| `--kb <name>` | 知识库名称（必填，写在子命令之前） |
-| `--db <path>` | 自定义数据库路径 |
-| `--registry <path>` | 自定义注册表路径 |
-| `--json` | JSON 格式输出 |
+`--kb / --db / --registry / --json` 均放在子命令之前。只有 index、freshness、stats、retrieve、search-image 要求 --kb；其他命令不需要。
+注册表结构及本机覆盖见 [rules/registry.md](../rules/registry.md)，具体选库以 load_registry 合并结果为准。
 
-> ⚠️ 全局参数必须写在子命令**之前**。
+| 任务 | 命令 |
+|---|---|
+| 查看实际可用命令 | `cli.py --help` / `cli.py retrieve --help` |
+| 已有文本库统计 | `cli.py --kb <name> --json stats` |
+| 新鲜度 | `cli.py --kb <name> --json freshness`（退出码 2 表示过期） |
+| 混合召回与重排 | `cli.py --kb <name> --json retrieve "查询" --top-k 3` |
+| 仅关键词，不调模型 | `cli.py --kb <name> --json retrieve "查询" --mode keyword --top-k 3` |
+| 仅向量召回，不重排 | `cli.py --kb <name> --json retrieve "查询" --mode semantic --no-rerank` |
+| 解释排序或限定路径 | retrieve 的 `--explain` / `--path-filter`；详情看子命令帮助 |
+| 导出查询过程 | retrieve 的 `--trace <输出.html>`（会写文件） |
+| 图文库以图搜图 | `cli.py --kb <图文库> search-image <图片>`；调用前确认域库协议 |
+| 增量索引 | `cli.py --kb <name> index` |
+| 全量重建 | `cli.py --kb <name> index --force`（需相应授权） |
+| 增量索引保留孤儿 | `cli.py --kb <name> index --no-prune` |
+| 通用文件解析 / 分块 | `cli.py ingest <文件>` / `cli.py chunk <文件>` |
+| 查询改写 / 摘要 | `cli.py rewrite "查询"` / `cli.py summary <文件>`（调用本地模型） |
+| 向量 / 重排调试 | `cli.py embed "文本"` / `cli.py rerank "查询" --docs 文档1 文档2` |
+| 完整诊断 | `cli.py --json doctor` |
 
-## 核心命令
+`retrieve --kb all` 不是合法参数顺序；合法的 `cli.py --kb all retrieve ...` 会扩大查询范围，默认跳过图文库，日常查询先选定域库。
+Archlib 图文库由 [Archlib 工程](C:/GarchOS/archlib/AGENTS.md) 管理，不用文本库 stats 的 0 推断它为空，不用通用 index 替代建筑 PDF 打标与图文索引流程。
 
-### doctor
-诊断系统状态（不需要 `--kb`）。
+## 状态查询与副作用
 
-```bash
-cli.py doctor
-```
+- 只验证入口：解释器 `--version` 和 `cli.py --help`，不调用模型。
+- 查登记 / 已加载模型：对实际本机端点 GET `/v1/models` / `/running`；端点来自 [服务配置](C:/AI/tools/llama-swap/config.yaml)。前者包含未加载项，两者都不是推理证明。
+- `stats` / `retrieve` 初始化存储对象，错误路径或缺表可能产生空库；只读查询先确认目标库和表存在。关键词路径可能首次建立 FTS。
+- `doctor` 会做真实 embedding 检查并初始化知识库存储；可能加载模型或创建缺表，不是只读探活。
+- 建索引、迁移、优化、清理与模型服务启停均按任务授权，命令存在不等于已获执行授权。
 
-### index
-建索引（增量）。
+## 旧入口
 
-```bash
-# 增量索引
-cli.py --kb <name> index
-
-# 全量重建
-cli.py --kb <name> index --force
-```
-
-### retrieve
-检索。
-
-```bash
-# 文本检索（默认 hybrid+智能权重）
-cli.py --kb <name> retrieve "查询内容"
-
-# 跨库检索
-cli.py --kb all retrieve "查询内容"
-
-# ⚠️ 上面这一整块（查询扩展 / 上下文消歧 / MMR / 自动路由 / Parent-Child）**全部已不存在**：
-#    --expand / --mmr / --route / --parent-child 在 CLI 里 0 次命中；
-#    --context 也不在 retrieve 上（它挂 rewrite）。
-#    现有诊断 flag 见本节上方 retrieve 的真实清单（--explain / --trace / --no-rerank / --path-filter）。
-```
-
-### ingest
-解析文件为结构化文档。
-
-```bash
-cli.py ingest <文件路径> --json
-```
-
-### rewrite
-查询改写。
-
-```bash
-cli.py rewrite "原始查询"
-```
-
-### summary
-文档摘要。
-
-```bash
-cli.py summary <文件路径>
-```
-
-## 工具命令
-
-### search-image
-以图搜图。
-
-```bash
-cli.py --kb <name> search-image <图片路径>
-```
-
-### freshness
-检查新鲜度。
-
-```bash
-cli.py --kb <name> freshness
-```
-
-### optimize（注意：是 `vector_store.py` 的子命令，不是 `cli.py` 的）
-优化索引（重建 FTS 索引等）。
-
-```bash
-python scripts/vector_store.py optimize --db <db> --kb <kb>
-```
-
-### migrate（同上，`vector_store.py` 的子命令）
-旧 SQLite 索引迁移到 LanceDB。
-
-```bash
-python scripts/vector_store.py migrate --sqlite <path> --db <db> --kb <kb>
-```
-
-### stats
-查看知识库统计。
-
-```bash
-cli.py --kb <name> stats
-```
-
-## 已砍掉的命令（不要再教）
-
-> **`kg extract/find/related/list/stats/visualize` 已从 CLI 移除**（2026-09-21 核实。
-> `AGENTS.md` 的负面指针也确认「kg 命令已砍掉」）。
-> `index --extract-entities` 仍会把实体抽出来，但**读取端不存在** —— 只写不读。
-
-要诊断检索为什么没命中，用 `retrieve` 的真实 flag：
-
-```bash
-cli.py --kb <name> retrieve "查询" --explain          # 每条的四路分数（语义/关键词/RRF/rerank）
-cli.py --kb <name> retrieve "查询" --trace out.html   # 检索推理链可视化
-cli.py --kb <name> retrieve "查询" --no-rerank         # 跳过精排，只看召回
-```
-
-## Muse Glimmer 管理
-
-> ⚠️ **不存在 `muse.py`**（2026-09-21 核实）。此前本文件教的 `muse status/start/stop`
-> 指向一个早已删除的脚本，照跑必然 `No such file`。
-
-真实管理方式（完整契约见 `C:\AI\memory\_canonical\LOCAL-MODELS.md` 第三节）：
-
-```powershell
-# 2026-09-21 甲-1：30B 由 llama-swap 托管，**不再手工起独立实例**。
-# 首个请求自动 spawn（冷加载实测 ~54s）；ttl: 900 空闲自卸。
-
-# 查活体（只读，不触发加载）
-curl http://127.0.0.1:9123/running                          # 已加载项 + state + ttl
-curl http://127.0.0.1:9123/upstream/muse-glimmer-30b/health # {"status":"ok"}
-
-# 卸载 / 改完 config.yaml 后重载
-curl -X POST http://127.0.0.1:9123/api/models/unload/muse-glimmer-30b
-schtasks /End /TN LlamaSwap; schtasks /Run /TN LlamaSwap
-
-# ⚠️ 计划任务 MuseGlimmer 已 Disabled —— 启用会起第二个 30B，直接 OOM
-```
+❌ local-models MCP、qwen-embedding、muse.py、kg 命令已退役；不再据旧示例调用。
+❌ `--expand / --mmr / --route / --parent-child` 不在当前 retrieve CLI；Python 内部能力不等于公开参数。
+`migrate / optimize` 属于 [vector_store.py](../scripts/vector_store.py) 的独立命令，非 cli.py 子命令；按该脚本 --help 和任务授权使用。
+模型管理规则只读 [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md) 与 [红线](../rules/redlines.md)，本文件不复制启动参数和卸载命令。

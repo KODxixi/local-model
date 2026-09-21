@@ -897,11 +897,9 @@ def main() -> int:
         ]:
             _p = skill_root / _f
             if _p.exists():
-                _h = _hashlib.md5()
-                with open(_p, "rb") as _fp:
-                    while _chunk := _fp.read(8192):
-                        _h.update(_chunk)
-                print(f"[local-model] {_f} md5={_h.hexdigest()[:8]}", file=sys.stderr)
+                _content = _p.read_bytes()
+                _md5 = _hashlib.md5(_content).hexdigest()[:8]
+                print(f"[local-model] {_f} md5={_md5} chars={len(_content.decode('utf-8'))}", file=sys.stderr)
     # P4: 全局 --json（子命令前）与子命令级 --json（子命令后）取 OR。
     # 二者 dest 不同（json_global / json），这里合并成统一的 args.json。
     args.json = bool(getattr(args, "json", False) or getattr(args, "json_global", False))

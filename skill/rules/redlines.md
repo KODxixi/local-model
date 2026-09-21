@@ -4,8 +4,8 @@
 
 ## 端点隔离
 
-1. **embed/rerank 永远只走检索端点（llama-swap 9123）**；对话/视觉端点只跑对话与识图
-2. 禁止把 `text-embedding-*` / `*-reranker-*` load 进对话/视觉端点
+1. **embed/rerank 只走已配置的本地 llama-swap**，不得用外部模型兜底；端点以 `C:\AI\tools\llama-swap\config.yaml` 为准。
+2. 统一调度端点下仍按模型 id 区分向量、重排与对话/视觉职责，不能拿对话模型处理 embedding 请求。
 3. 检索不通时先 `curl 127.0.0.1:9123/running`，绝不靠改端点到别处应急
 
 ## 数据边界
@@ -25,5 +25,5 @@
 
 ## 配置真相源
 
-8. **`registry.yaml` 是唯一真相源**，模型地址/维度/知识库配置只改这里
-9. 私有路径写 `registry.local.yaml`（已 gitignore），不改代码
+8. 服务模型、地址、启动与生命周期以 `C:\AI\tools\llama-swap\config.yaml` 为准；Skill 知识库模板在 `registry.yaml`，不得混淆两者。
+9. 本机知识库路径写 `registry.local.yaml`（已 gitignore），由 `load_registry()` 合并；当前加载与覆盖约定见 [registry.md](registry.md)，不在代码硬编码本机路径。

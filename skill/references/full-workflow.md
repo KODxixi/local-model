@@ -223,7 +223,7 @@ rag_enhance / ingest 120s）。甲-1 前它在 8080 独立进程里常驻、不�
 |---|---|---|
 | 文本向量 + reranker | llama-swap `ttl: 0` | 常驻。**为延迟**（vl-reranker-2b 冷加载 16.27s 是全栈最慢），非为避免超时 —— 上限是 30s，冷加载够得着 |
 | 图文向量 | llama-swap `ttl: 300` | 用完自退，好让文本向量回来（两者互斥） |
-| 30B（Muse Glimmer） | 计划任务 `MuseGlimmer`（常驻） | 打标 / 对话 / local-decision 的前提 |
+| 30B（Muse Glimmer） | 计划任务 `MuseGlimmer`（常驻） | 打标 / 对话 的前提 |
 
 冲突时**通知用户**：不要自行调度，也不要降级硬跑。
 
