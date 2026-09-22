@@ -194,6 +194,17 @@ def test_error_output_json_format(capsys):
     assert payload["error"]["kb"] == "nope"
 
 
+def test_index_returns_failure_when_files_fail():
+    args = SimpleNamespace(
+        json=True, registry="registry.yaml", db="C:\\tmp\\lancedb",
+        kb="demo", force=False, no_prune=True,
+    )
+    with patch.object(cli, "load_registry", return_value={"demo": _fake_kb()}), \
+         patch.object(cli, "RAGIndexer") as indexer:
+        indexer.return_value.index.return_value = {"files_failed": 1}
+        assert cmd_index(args) == 2
+
+
 def test_retired_extract_entities_flag_is_not_advertised():
     """已删除的知识图谱实现不能继续暴露为可调用 CLI。"""
     parser = build_parser()

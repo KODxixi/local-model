@@ -97,17 +97,24 @@ class _IndexLock:
             # sends a console control event on Windows and is not a no-op probe.
             import ctypes
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+            kernel.GetExitCodeProcess.restype = ctypes.c_int
+            kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+            kernel.CloseHandle.restype = ctypes.c_int
+            handle = kernel.OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION, False, pid
             )
             if not handle:
-                return False
+                return ctypes.get_last_error() == 5  # access denied: fail closed
             try:
                 code = ctypes.c_ulong()
-                ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-                return bool(ok and code.value == 259)  # STILL_ACTIVE
+                ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+                return not ok or code.value == 259  # STILL_ACTIVE; API failure: fail closed
             finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
+                kernel.CloseHandle(handle)
         try:
             os.kill(pid, 0)
             return True

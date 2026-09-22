@@ -9,7 +9,7 @@ description: |
 
 # local-model
 
-将本地文件变成可检索语料。文本库默认使用 `text-embedding-qwen3-embedding-0.6b`，实际输出 1024 维；调用统一走 [scripts/cli.py](scripts/cli.py)，参数和默认值以实际 --help 为准。领域案例 图文库是宿主领域索引，独立保留 2048 维，不由本 Skill 重建。
+将本地文件变成可检索语料。文本库默认使用 `text-embedding-qwen3-embedding-0.6b`，实际输出 1024 维；调用统一走 [scripts/cli.py](scripts/cli.py)，参数和默认值以实际 --help 为准。建筑案例图文库是独立索引，保留 2048 维，不由本 Skill 重建。
 权威文件分工见 [AGENTS.md](AGENTS.md)，本入口不复制模型启动参数、显存数字和打标配置。
 
 ## 先选动作
@@ -56,7 +56,7 @@ $RagPython = Join-Path $SkillRoot '.venv\Scripts\python.exe'
 ## 边界与验收
 
 - 文本库的目标 schema 是 1024 维；注册表改为 1024 不会转换已有 4096 向量。旧表必须从原始资料 shadow 重建，验收通过后再切换；不要向旧表追加新维度，也不要截断旧向量。
-- `vl-embedding-2b` 的 领域案例 图文库由宿主工程独立维护，当前 2048 维；本 Skill 不把它当文本库、不替它重建。
+- `vl-embedding-2b` 的建筑案例图文库由宿主工程独立维护，当前 2048 维；本 Skill 不把它当文本库、不替它重建。
 - 调用前遵守 [红线](rules/redlines.md)：检索/重排使用本地 local-model；模型显存、互斥与并发按实际配置，不自行启动第二份模型服务。
 - 原文件是事实源，索引是可再生投影；命中后回源核对。新增、更新或删除知识按 [knowledge-io.md](C:/AI/rules/knowledge-io.md) 验证索引及检索。
 - `stats` / `retrieve` 会打开存储；不存在的表可能初始化，首次关键词查询可能建 FTS。严格只读检查先确认库与表存在，勿拿错误 --db 路径试跑。

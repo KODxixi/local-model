@@ -207,7 +207,7 @@ def cmd_index(args: argparse.Namespace) -> int:
             print(f"错误（前 {len(result['errors'])}）:", file=sys.stderr)
             for e in result["errors"]:
                 print(f"  - {e['path']}: {e['error']}", file=sys.stderr)
-    return 0
+    return 2 if result["files_failed"] else 0
 
 
 def cmd_freshness(args: argparse.Namespace) -> int:

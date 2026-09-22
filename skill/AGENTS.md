@@ -17,9 +17,7 @@
 | 修改代码、跑测试 | [开发流程](rules/dev-workflow.md) |
 | 同步公开仓库 | [受管同步脚本](C:/AI/tools/governance/sync-local-models-public.ps1)；本目录是母本，公开仓库只接收脚本映射结果 |
 | 查设计理由与历史实验 | [决策记录](rules/decisions.md)、[完整工作流](references/full-workflow.md)；历史数值不覆盖当前配置 |
-| 查全局向量迁移 / 精排边界 | [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md) §全局向量库迁移目标、§五；文本消费方统一 1024，领域案例 图文库独立保留 2048 | 不把 reranker 伪装成有固定 embedding 维度的模型 |
-
-> 文本注册表目标已切到 1024；现有 4096 文本表在逐库 shadow 重建完成前不可继续写入。先建新 LanceDB/派生表并验收，再切换生产目录；禁止修改旧向量 BLOB。领域案例 不走此迁移。
+| 查全局向量迁移 / 精排边界 | [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md) §全局向量库迁移目标、§五 |
 
 ## 真相源分配表
 

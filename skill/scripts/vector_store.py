@@ -268,7 +268,7 @@ class LanceDBVectorStore:
             if existing_dim != self.dimensions:
                 raise ValueError(
                     f"表 {table_name} 实际维度 {existing_dim} 与配置 {self.dimensions} 不符，"
-                    f"请 --force 重建或修正 registry.yaml 的 dimensions 配置。"
+                    f"请在新数据库中从原始资料重建，再切换配置；--force 不会改变旧表 schema。"
                 )
         except ValueError:
             raise
