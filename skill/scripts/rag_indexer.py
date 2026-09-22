@@ -92,8 +92,23 @@ class _IndexLock:
     def _pid_alive(self, pid: int) -> bool:
         if pid <= 0:
             return False
+        if os.name == "nt":
+            # ponytail: use the Windows read-only process API; os.kill(pid, 0)
+            # sends a console control event on Windows and is not a no-op probe.
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+                return bool(ok and code.value == 259)  # STILL_ACTIVE
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
         try:
-            # Windows: os.kill(pid, 0) works as a liveness probe.
             os.kill(pid, 0)
             return True
         except (ProcessLookupError, PermissionError):
@@ -154,8 +169,8 @@ class KBConfig:
     type: str = "text"  # text / multimodal
     patterns: list[str] = field(default_factory=lambda: ["*.md", "*.txt", "*.py", "*.json", "*.yaml", "*.yml"])
     path_filter: str | None = None
-    dimensions: int = 4096
-    embed_model: str = "text-embedding-qwen3-embedding-8b"
+    dimensions: int = 1024
+    embed_model: str = "text-embedding-qwen3-embedding-0.6b"
     max_file_bytes: int = 5_000_000
     max_files: int = 10000
     # P0: 向量存储后端（lancedb / qdrant / chroma ...）。默认取 registry.yaml
@@ -171,8 +186,8 @@ class KBConfig:
             type=d.get("type", "text"),
             patterns=d.get("patterns", ["*.md", "*.txt", "*.py", "*.json", "*.yaml", "*.yml"]),
             path_filter=d.get("path_filter"),
-            dimensions=d.get("dimensions", 4096),
-            embed_model=d.get("embed_model", "text-embedding-qwen3-embedding-8b"),
+            dimensions=d.get("dimensions", 1024),
+            embed_model=d.get("embed_model", "text-embedding-qwen3-embedding-0.6b"),
             max_file_bytes=d.get("max_file_bytes", 5_000_000),
             max_files=d.get("max_files", 10000),
         )
@@ -197,8 +212,15 @@ def load_registry(registry_path: str | Path) -> dict[str, KBConfig]:
             **(local.get("knowledge_bases") or {}),
         }
     default_backend = str((data.get("vector_store") or {}).get("type", "lancedb"))
+    text_embedding = (data.get("text_backend") or {}).get("embedding") or {}
+    default_dimensions = int(text_embedding.get("dimensions", 1024))
+    default_embed_model = str(text_embedding.get("model", "text-embedding-qwen3-embedding-0.6b"))
     kbs = {}
     for name, cfg in (data.get("knowledge_bases") or {}).items():
+        cfg = dict(cfg)
+        if cfg.get("type", "text") == "text":
+            cfg.setdefault("dimensions", default_dimensions)
+            cfg.setdefault("embed_model", default_embed_model)
         kb = KBConfig.from_dict(name, cfg)
         kb.vector_backend = cfg.get("vector_backend", default_backend)
         kbs[name] = kb
@@ -218,7 +240,6 @@ class RAGIndexer:
         *,
         db_path: str | Path = "~/.local-rag/lancedb",
         embed_fn: Callable[[list[str]], list[list[float]]] | None = None,
-        extract_entities: bool = False,
         perf_config: dict[str, Any] | None = None,
         registry_path: str | Path | None = None,
     ) -> None:
@@ -243,12 +264,6 @@ class RAGIndexer:
                 texts, model=kb.embed_model, batch_size=self._embed_batch_size
             )
         )
-        self.extract_entities = extract_entities
-        self._kg = None
-        if extract_entities:
-            from knowledge_graph import KnowledgeGraph
-            self._kg = KnowledgeGraph(db_path=str(self.db_path), kb_name=kb.name)
-
     # ------------------------------------------------------------------
     # 文件发现与增量检测
     # ------------------------------------------------------------------
@@ -307,18 +322,12 @@ class RAGIndexer:
     # index() 各阶段（单一职责，可独立测试 / 单独失败隔离）
     # ------------------------------------------------------------------
 
-    def _resolve_kg(self, do_entities: bool) -> None:
-        """按需懒初始化知识图谱客户端（extract_entities=True 且尚未创建时）。"""
-        if do_entities and self._kg is None:
-            from knowledge_graph import KnowledgeGraph
-            self._kg = KnowledgeGraph(db_path=str(self.db_path), kb_name=self.kb.name)
-
     def _warmup_if_needed(self) -> None:
         """按 perf_config.warmup_on_index 发一次极小 embedding 请求触发 GPU/算子预热（失败不阻断）。"""
         if not self.perf_config.get("warmup_on_index", True):
             return
         try:
-            embed_texts(["warmup"], batch_size=1, timeout=WARMUP_TIMEOUT)
+            embed_texts(["warmup"], model=self.kb.embed_model, batch_size=1, timeout=WARMUP_TIMEOUT)
         except Exception as exc:
             print(f"[warmup] 预热失败（不阻断索引）: {exc}", file=sys.stderr)
 
@@ -409,60 +418,29 @@ class RAGIndexer:
         except Exception as exc:
             print(f"[image-embed] PDF页面图向量失败 {file_path}: {exc}", file=sys.stderr)
 
-    def _extract_entities_if_needed(
-        self,
-        doc: Any,
-        file_path: Path,
-        mtime_ns: int,
-        *,
-        enabled: bool,
-    ) -> int:
-        """可选知识图谱实体提取（LLM 失败回退规则；失败不阻断主流程），返回入库实体数。"""
-        if not enabled or self._kg is None:
-            return 0
-        try:
-            from knowledge_graph import extract_entities_llm, extract_entities_regex
-            entities = extract_entities_llm(doc.content, title=doc.title)
-            if not entities:
-                entities = extract_entities_regex(doc.content)
-            if not entities:
-                return 0
-            return int(self._kg.add_entities(entities, str(file_path), doc.content, mtime_ns))
-        except Exception as exc:
-            print(f"[kg] 实体提取失败 {file_path}: {exc}", file=sys.stderr)
-            return 0
+    def _index_single_file(self, file_path: Path) -> dict[str, Any]:
+        """索引单个文件的完整流水线：parse → chunk → embed → upsert → (pdf图)。
 
-    def _index_single_file(self, file_path: Path, *, extract_entities: bool) -> dict[str, Any]:
-        """索引单个文件的完整流水线：parse → chunk → embed → upsert → (pdf图) → (实体)。
-
-        返回 {path, chunks_embedded, chunks_upserted, entities_extracted}；
+        返回 {path, chunks_embedded, chunks_upserted}；
         空分块文件返回全 0，视为成功（不抛错）。
         """
         doc = self._parse_document(file_path)
         chunks = self._chunk_document(doc, file_path)
         if not chunks:
-            return {"path": str(file_path), "chunks_embedded": 0, "chunks_upserted": 0, "entities_extracted": 0}
+            return {"path": str(file_path), "chunks_embedded": 0, "chunks_upserted": 0}
         vectors = self._embed_chunks(chunks)
         mtime_ns = file_path.stat().st_mtime_ns
         upserted = self._upsert_chunks(chunks, vectors, doc, file_path, mtime_ns)
         self._upsert_pdf_page_images_if_needed(doc, file_path, mtime_ns)
-        entities = self._extract_entities_if_needed(doc, file_path, mtime_ns, enabled=extract_entities)
         return {
             "path": str(file_path),
             "chunks_embedded": len(chunks),
             "chunks_upserted": upserted,
-            "entities_extracted": entities,
         }
 
-    def _prune_orphans(self, existing_paths: set[str], *, do_entities: bool = False) -> int:
-        """清理向量库中不在 existing_paths 的孤儿 chunks，并同步清理 KG 孤儿实体。"""
-        pruned = int(self.store.delete_orphans(existing_paths))
-        if do_entities and self._kg is not None:
-            try:
-                self._kg.delete_orphans(existing_paths)
-            except Exception as exc:
-                print(f"[kg] 清理孤儿实体失败: {exc}", file=sys.stderr)
-        return pruned
+    def _prune_orphans(self, existing_paths: set[str]) -> int:
+        """清理向量库中不在 existing_paths 的孤儿 chunks。"""
+        return int(self.store.delete_orphans(existing_paths))
 
     def _build_result(
         self,
@@ -524,11 +502,8 @@ class RAGIndexer:
         force: bool = False,
         prune: bool = True,
         progress_callback: Callable[[int, int, str], None] | None = None,
-        extract_entities: bool | None = None,
     ) -> dict[str, Any]:
         """构建或刷新索引：加锁 → 预热 → 发现文件 → 逐文件索引 → prune → optimize。"""
-        do_entities = self.extract_entities if extract_entities is None else extract_entities
-        self._resolve_kg(do_entities)
         start_time = time.time()
         with _IndexLock():
             self._warmup_if_needed()
@@ -537,23 +512,22 @@ class RAGIndexer:
                 return self._skip_result(discovered=discovered, skipped=skipped, start_time=start_time, reason="no files to index")
             files_result: list[dict[str, Any]] = []
             errors: list[dict[str, str]] = []
-            total_upserted = total_entities = 0
+            total_upserted = 0
             for processed, file_path in enumerate(to_index, 1):
                 if progress_callback:
                     progress_callback(processed, len(to_index), str(file_path))
                 try:
-                    fr = self._index_single_file(file_path, extract_entities=do_entities)
+                    fr = self._index_single_file(file_path)
                     files_result.append(fr)
                     total_upserted += fr.get("chunks_upserted", 0)
-                    total_entities += fr.get("entities_extracted", 0)
                 except Exception as exc:
                     errors.append({"path": str(file_path), "error": str(exc)[:ERROR_MSG_TRUNCATE]})
-            pruned = self._prune_orphans({str(f) for f in self._scan_disk_files()}, do_entities=do_entities) if (prune and not force) else 0
+            pruned = self._prune_orphans({str(f) for f in self._scan_disk_files()}) if (prune and not force) else 0
             try:
                 self.store.optimize()
             except Exception as exc:
                 print(f"[optimize] 失败（不阻断索引）: {exc}", file=sys.stderr)
-            return self._build_result(discovered=discovered, skipped=skipped, indexed=len(files_result), failed=len(errors), chunks=total_upserted, entities=total_entities, pruned=pruned, start_time=start_time, errors=errors[:MAX_REPORTED_ERRORS])
+            return self._build_result(discovered=discovered, skipped=skipped, indexed=len(files_result), failed=len(errors), chunks=total_upserted, entities=0, pruned=pruned, start_time=start_time, errors=errors[:MAX_REPORTED_ERRORS])
 
     def check_freshness(self) -> dict[str, Any]:
         """检查索引新鲜度：比较文件系统和索引中的 mtime。
@@ -629,8 +603,6 @@ if __name__ == "__main__":
     p_index = sub.add_parser("index", help="建立/更新索引（默认）")
     p_index.add_argument("--force", action="store_true", help="强制全量重建")
     p_index.add_argument("--no-prune", action="store_true", help="不清理孤儿 chunks")
-    p_index.add_argument("--extract-entities", action="store_true",
-                         help="同时提取实体到知识图谱（调用 LLM，索引变慢）")
 
     p_fresh = sub.add_parser("freshness", help="检查索引新鲜度")
     p_stats = sub.add_parser("stats", help="查看索引统计")
@@ -645,8 +617,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     kb = registry[args.kb]
-    do_entities = getattr(args, "extract_entities", False)
-    indexer = RAGIndexer(kb, db_path=args.db, extract_entities=do_entities)
+    indexer = RAGIndexer(kb, db_path=args.db, registry_path=args.registry)
 
     if args.command == "freshness":
         result = indexer.check_freshness()

@@ -1,7 +1,6 @@
-# local-rag 知识库注册表 — 唯一真相源 (single source of truth)
+# local-rag 公开注册表模板；本机覆盖见 registry.local.yaml
 # 新增知识库 = 加一段配置，不改代码。
-# MCP (local-models) 和 Skill (local-model) 都读这个文件。
-# 旧的 kbs.yaml 已 deprecated，仅作向后兼容 fallback。
+# CLI 与索引/检索脚本都通过 load_registry() 读取这两层配置。
 #
 # 本机私有库不要写在这里：新建同目录下的 registry.local.yaml（已在 .gitignore 中），
 # load_registry() 会自动把它的 knowledge_bases 合并/覆盖到本文件之上。
@@ -14,8 +13,8 @@ text_backend:
   base_url: http://127.0.0.1:9123
   embedding:
     base_url: http://127.0.0.1:9123
-    model: text-embedding-qwen3-embedding-8b
-    dimensions: 4096
+    model: text-embedding-qwen3-embedding-0.6b
+    dimensions: 1024
   rerank:
     base_url: http://127.0.0.1:9123
     model: vl-reranker-2b
@@ -39,8 +38,7 @@ performance:
   rerank_recall_size: 24     # rerank 候选数（24 篇 × 0.36s ≈ 9s）
   warmup_on_index: true      # 索引前发送小请求触发模型预热（2026-09-21 起为 CUDA，非 Vulkan shader 编译）
 
-# 旧 SQLite 索引已于 2026-09-20 删除（LanceDB 迁移早已完成，无代码读此路径）。
-# `cli.py migrate --sqlite <path>` 仍需显式传路径，故不再保留默认键。
+# 旧 SQLite 索引已于 2026-09-20 删除；现行入口只使用 LanceDB。
 
 # 知识库列表
 # 开箱是空的：把下面任意一段取消注释、root 改成你自己的目录即可用。
@@ -51,8 +49,8 @@ knowledge_bases:
   #   type: text
   #   root: ~/Documents/my-kb
   #   patterns: ["*.md", "*.txt", "*.pdf", "*.docx", "*.xlsx", "*.pptx"]
-  #   dimensions: 4096
-  #   embed_model: text-embedding-qwen3-embedding-8b
+  #   dimensions: 1024
+  #   embed_model: text-embedding-qwen3-embedding-0.6b
   #   max_file_bytes: 5000000
   #   max_files: 10000
   #   capability:

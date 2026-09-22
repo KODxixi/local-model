@@ -97,7 +97,7 @@ verticals/<name>/
 - 文本引擎是 LanceDB（`~/.local-rag/lancedb/`），每库一张 `kb_{name}` 表（4096 维）+ 可选 `kb_{name}_images` 表（2048 维）；
   chunk 键 `(chunk_id, path)`，**同 root 只能有一份 chunk 集** → 子域一律 path_filter 视图，别同 root 叠两个包。
   旧 SQLite 索引（`~/.claude/mcp/local-models/index.sqlite3`）已废弃，**并已于 2026-09-20 删除**；
-  如需从别处的 SQLite 迁移，`cli.py migrate --sqlite <路径>` 仍可用。
+  如需从别处的 SQLite 迁移，使用 `scripts/vector_store.py migrate --sqlite <路径>`，不要把它当作统一 CLI 子命令。
 - `indexer.index()` 上限：`max_files=10000` / 单文件 `max_file_bytes=5_000_000`（5MB，registry.yaml 默认；超限需拆 root 或改配置）。
 - **孤儿清理（2026-09-02 已实现）**：`index()` 默认按 root 删除真源已消失的孤儿 chunk；
   **仅全量扫描（未截断）时执行**——文件数 >10000 时自动停用（返回 `prune_skipped_truncated`），防误删超限未扫文件。
@@ -163,4 +163,3 @@ registration: 数据工具注册表（不进 registry.yaml 语义库）
 
 > 附注：结构化事实（行情/成交/指标）走 data 槽位的适配器，**永不进 embedding**；
 > 与之相关的解读性文字才进语义库。
-

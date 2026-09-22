@@ -138,8 +138,6 @@ Qwen3-Reranker-**8B** 已从 llama-swap 摘除，见 config.yaml 的『已移除
 - **图文 embedding 协议坑（llama.cpp）**：`multimodal_data` 要**裸 base64**
   （不要 `data:image/...` 前缀）；webp 等格式解不了 → 客户端 PIL 转 PNG；
   超大图降采样到 1152px 防 413。
-- **MCP 开发坑**：stdio server 里 subprocess 必须 `stdin=DEVNULL`（否则继承 MCP stdin 卡死）；
-  旧版 FastMCP 禁 `from __future__ import annotations`。
 
 ## 配置级陷阱与不变量
 
@@ -160,18 +158,16 @@ Qwen3-Reranker-**8B** 已从 llama-swap 摘除，见 config.yaml 的『已移除
 | `vl-embedding-2b` | 300 | **12.31s** | 0.02s |
 | （已移除）`text-reranker-8b` | — | 12.48s（历史最坏 24.27s） | 1.03–1.13s |
 | `muse-glimmer-30b` | **900** | **~54s**（2026-09-21 甲-1 实测） | — |
-| `muse-glimmer-30b` | **900** | **~54s**（2026-09-21 甲-1 实测） | — |
 
 **最小的调用方 timeout 是 agent 记忆检索的 30s，硬编码不可配**
-（`DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 3e4`；2026-09-21 从已装 openclaw@2026.9.5 的
-`dist/tools-*.mjs` 核实。**旧文档写的 15e3 是更早版本的数字，已作废**）。
-比对冷加载时要拿它当上界，而不是拿 skill/MCP 的 180s——
-`tools/governance/verify-local-models.ps1` 目前只从 skill 层 `rag_client.DEFAULT_TIMEOUT`(180)
-与 mcp 层 `image_retrieval`(300) 取最小值，**覆盖不到这 30s**，改 ttl 时须手工核。
+（`DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 3e4`；2026-09-21 从已安装客户端核实。
+**旧文档写的 15e3 是更早版本的数字，已作废**）。
+比对冷加载时要拿它当上界，而不是拿通用 RAG 请求的 180s；现有服务校验
+**覆盖不到这条上游 30s 限制**，改 ttl 时须手工核。
 
 **Muse Glimmer 30B（2026-09-21 甲-1 起在本表）**：由 llama-swap 托管，`ttl: 900`
-（空闲 15 分钟自卸）。**它不受上面那条 30s 约束** —— 30s 是检索路径（OpenClaw
-记忆检索）的上限，而 30B 的调用方 timeout 都 ≥90s（archlib 打标 90s、
+（空闲 15 分钟自卸）。**它不受上面那条 30s 约束** —— 30s 是上游记忆检索路径的上限，
+而 30B 的调用方 timeout 都 ≥90s（图文打标 90s、
 rag_enhance / ingest 120s）。甲-1 前它在 8080 独立进程里常驻、不归 llama-swap 管；
 那份重复登记曾于 2026-09-20 移除（当时装不下两份）。
 
@@ -191,7 +187,7 @@ rag_enhance / ingest 120s）。甲-1 前它在 8080 独立进程里常驻、不�
 |---|---|---|
 | A 只 30B | 见权威段 | 见权威段 |
 | B 文本栈 + 30B（**常驻稳态**） | 见权威段 | 见权威段 |
-| C 图文栈 + 30B（archlib 图检） | 见权威段 | 见权威段 |
+| C 图文栈 + 30B（图文检索） | 见权威段 | 见权威段 |
 | D 三模型共驻 | **不可达**（两个 embed 组 exclusive 互斥） | — |
 
 > **数字不在此处复述** —— 唯一权威是 `C:\AI\tools\llama-swap\config.yaml` 头部【显存账】段，
@@ -201,7 +197,7 @@ rag_enhance / ingest 120s）。甲-1 前它在 8080 独立进程里常驻、不�
 
 修掉的两处（都不是"模型太多"）：
 1. **`-c` 超配**：text-embedding 开 16384、text-reranker 开 32768，白占约 9.4 GB KV。
-   消费方实际上限是 2048（ChatOS `indexing.contextLength`）。
+   某会话消费方实际上限是 2048（`indexing.contextLength`）。
 2. **`multimodal` 组 `swap: true` 用反**：把 vl-embedding 与 vl-reranker 设成互斥，
    而图文检索是 embed→rerank 两步 → **每查一次装卸 6 GB 模型**。实测复现过。
 
@@ -325,6 +321,6 @@ agent 调用协议 / 生命周期 / 示例）见同目录 `kb-manifest-schema.md
    `good_for/not_for/example_queries/freshness`（agent 路由依据）。
 4. **挂载**：semantic → `registry.yaml`（或私有 `registry.local.yaml`）加段；
    data → 数据工具注册表；T3 → 自打包（own LanceDB）。
-5. **build + 验证**：`index(kb)` / 外部 CLI build / 灌数脚本 → `list_kbs` + `search(kb, query)` 命中核验。
-6. **路由生效**：capability 描述同步进目录（`list_kbs` / MCP server instructions）。
+5. **build + 验证**：`cli.py --kb <name> index` / 外部 CLI build / 灌数脚本 → `stats` + `retrieve` 命中核验。
+6. **路由生效**：capability 描述写入注册表，并由 Agent 入口文档指向对应域库。
 7. **生命周期记档**：记录该域 增/改/删 的 build/sync/prune 命令与已知缺口。

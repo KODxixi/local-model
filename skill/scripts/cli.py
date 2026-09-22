@@ -191,7 +191,7 @@ def cmd_index(args: argparse.Namespace) -> int:
                     fix=f"可用知识库: {', '.join(registry)}")
         return 1
     kb = registry[args.kb]
-    indexer = RAGIndexer(kb, db_path=args.db, extract_entities=args.extract_entities)
+    indexer = RAGIndexer(kb, db_path=args.db, registry_path=args.registry)
     result = indexer.index(force=args.force, prune=not args.no_prune)
     if args.json:
         _dump(result, True)
@@ -201,7 +201,7 @@ def cmd_index(args: argparse.Namespace) -> int:
               f"索引 {result['files_indexed']}（跳过未变更 {result['files_skipped_unchanged']}），"
               f"失败 {result['files_failed']}")
         print(f"chunks: {result['chunks_indexed']}（库内共 {result['total_chunks_in_store']}），"
-              f"实体: {result['entities_indexed']}，孤儿清理: {result['orphan_files_pruned']}")
+              f"孤儿清理: {result['orphan_files_pruned']}")
         print(f"耗时: {result['elapsed_seconds']}s")
         if result.get("errors"):
             print(f"错误（前 {len(result['errors'])}）:", file=sys.stderr)
@@ -219,7 +219,7 @@ def cmd_freshness(args: argparse.Namespace) -> int:
                     fix=f"可用知识库: {', '.join(registry)}")
         return 1
     kb = registry[args.kb]
-    indexer = RAGIndexer(kb, db_path=args.db)
+    indexer = RAGIndexer(kb, db_path=args.db, registry_path=args.registry)
     result = indexer.check_freshness()
     if args.json:
         _dump(result, True)
@@ -273,7 +273,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             # 2026-09-21：跨库检索**默认跳过 multimodal 库**。
             # 根因：multimodal 库的 embed_model 是 vl-embedding-2b，而两个向量组
             #   `exclusive: true` 互斥 —— 一次 `--kb all` 会驱逐常驻的 text-embedding（6.57 GB），
-            #   全机文本检索进入 12.31s 冷加载窗口，直接吃掉 OpenClaw memory_search
+            #   全机文本检索进入 12.31s 冷加载窗口，直接吃掉上游 memory_search
             #   那个不可配的 30s 硬上限。而 `--kb all` 恰恰是文档推荐用法。
             # 要图检请显式 `--kb <图文库名>` —— 让"会换向量组"这件事是显式的。
             if getattr(kb, "type", "text") == "multimodal":
@@ -284,7 +284,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 })
                 continue
             try:
-                retriever = RAGRetriever(kb, db_path=args.db)
+                retriever = RAGRetriever(kb, db_path=args.db, registry_path=args.registry)
                 results = retriever.retrieve(
                     args.query,
                     top_k=args.top_k,
@@ -319,7 +319,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                     fix=f"可用知识库: {', '.join(registry)}（或用 --kb all 跨库）")
         return 1
     kb = registry[args.kb]
-    retriever = RAGRetriever(kb, db_path=args.db)
+    retriever = RAGRetriever(kb, db_path=args.db, registry_path=args.registry)
     trace_output = getattr(args, "trace", None)
     results = retriever.retrieve(
         args.query,
@@ -784,7 +784,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("index", help="建立/更新索引")
     p.add_argument("--force", action="store_true", help="强制全量重建")
     p.add_argument("--no-prune", action="store_true", help="不清理孤儿 chunks")
-    p.add_argument("--extract-entities", action="store_true", help="同时提取实体到知识图谱")
     _add_json(p)
     p.set_defaults(func=cmd_index)
 
@@ -855,7 +854,7 @@ def build_parser() -> argparse.ArgumentParser:
     # embed (调试)
     p = sub.add_parser("embed", help="生成 embedding（调试用）")
     p.add_argument("text", help="输入文本")
-    p.add_argument("--model", default="text-embedding-qwen3-embedding-8b",
+    p.add_argument("--model", default="text-embedding-qwen3-embedding-0.6b",
                    help="embedding 模型（默认 %(default)s）")
     _add_json(p)
     p.set_defaults(func=cmd_embed)

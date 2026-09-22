@@ -28,7 +28,7 @@
 | 完整诊断 | `cli.py --json doctor` |
 
 `retrieve --kb all` 不是合法参数顺序；合法的 `cli.py --kb all retrieve ...` 会扩大查询范围，默认跳过图文库，日常查询先选定域库。
-Archlib 图文库由 [Archlib 工程](C:/GarchOS/archlib/AGENTS.md) 管理，不用文本库 stats 的 0 推断它为空，不用通用 index 替代建筑 PDF 打标与图文索引流程。
+领域图文库由宿主工程管理；不用文本库 stats 的 0 推断它为空，也不用通用 index 替代建筑 PDF 打标与图文索引流程。
 
 ## 状态查询与副作用
 

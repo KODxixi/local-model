@@ -7,7 +7,7 @@
 | 决策 | 理由 |
 |------|------|
 | LanceDB 替代 SQLite | ANN 检索 vs 全表扫描，列式存储压缩率高，无锁并发 |
-| 文本表4096维 + 图片表2048维分离 | 不同模型维度不同，混在一张表会导致维度冲突 |
+| 文本表1024维 + 领域案例图片表2048维分离 | 不同模型维度不同，混在一张表会导致维度冲突；领域案例由宿主工程独立管理 |
 | Table.optimize() 替代 compact_files() | 消除 deprecated warning，使用 LanceDB 推荐的新 API |
 | FTS 索引懒加载 | 首次 keyword_search 时自动创建，不需要手动建索引 |
 
@@ -36,8 +36,7 @@
 
 | 决策 | 理由 |
 |------|------|
-| llama-swap 检索轨 + 8080 对话轨，**两路都 CUDA**（2026-09-21） | 检索三模型用 CUDA llama.cpp（TTL装卸），对话/视觉/打标用 8080 CUDA + DFlash。旧"检索走 Vulkan"已废——Vulkan 无 Tensor Core，批量 prefill 实测 17/s，CUDA 140+/s |
-| **30B 从 8080 独立进程迁入 llama-swap**（2026-09-21 甲-1） | 要「自主调度 + 自主卸载 + 调用前判断」就必须单一调度器；llama-swap 原生提供 `ttl` / `groups` / `/running`。**`proxy:` 键不存在** —— llama-swap 只能 spawn、不能代理外部进程，所以「把 8080 挂进去」这条路从根上不成立。代价：`-c 32768 → 16384`（与检索栈共存），打标的 24576 被静默钳到 ~13.5k（实测不影响 —— 产出仅 ~750 token）。8080 实例退役、计划任务 `MuseGlimmer` 置 Disabled（防双开 OOM）。消费方 archlib / ChatOS / local-decision / skill 三处默认端点全部改指 9123 |
+| **30B 从 8080 独立进程迁入 llama-swap**（2026-09-21 甲-1） | 要「自主调度 + 自主卸载 + 调用前判断」就必须单一调度器；llama-swap 原生提供 `ttl` / `groups` / `/running`。**`proxy:` 键不存在** —— llama-swap 只能 spawn、不能代理外部进程，所以「把 8080 挂进去」这条路从根上不成立。代价：`-c 32768 → 16384`（与检索栈共存），打标的 24576 被静默钳到 ~13.5k（实测不影响 —— 产出仅 ~750 token）。8080 实例退役、计划任务 `MuseGlimmer` 置 Disabled（防双开 OOM）。图文、会话、决策与 Skill 消费方的默认端点全部改指 9123 |
 | **reranker 用 2B 而非 8B**（2026-09-21） | 8B @`-c4096` 占 6.45 GB，与常驻 30B 相加超订；2B 占 1.36 GB。A/B 实测排序质量无差异（Top-1 6/8 打平，MRR 0.8375 vs 0.8000），代价只是分数区分度变窄（+0.11 vs +0.61），而**没有消费方拿 rerank 分数当阈值**（全部只用名次，RRF 亦按名次加权）。见 `C:\AI\tools\llama-swap\rerank-ab-20260921.md` |
 | **两类向量互斥**（2026-09-21） | 单个 embed + rerank 可共存，但两个 embed 相加超检索侧上限（≈8.6 GB，CUDA 后端）。文本检索与图文检索天然不同时发生，故 `exclusive: true` 零代价。数字以 LOCAL-MODELS.md 第四节为准 |
 | rag_client 零第三方依赖 | 外部项目可直接 import，不会因 lancedb 缺失而失败 |

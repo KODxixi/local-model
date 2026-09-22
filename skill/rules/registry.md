@@ -15,7 +15,7 @@
 
 | 模型 | 用途 | 维度 | 端点 |
 |------|------|------|------|
-| text-embedding-qwen3-embedding-8b | 文字向量 | 4096 | 检索端点（llama-swap 9123） |
+| text-embedding-qwen3-embedding-0.6b | 文字向量 | 1024 | 检索端点（llama-swap 9123） |
 | vl-embedding-2b | 图向量 | 2048 | 检索端点（llama-swap 9123） |
 | vl-reranker-2b | **文本 + 图文精排（共用）** | - | 检索端点（llama-swap 9123） |
 | Muse Glimmer 30B + DFlash + Vision | 对话/视觉主模型（`ttl: 900` 空闲自卸） | - | llama-swap 9123 (CUDA + DFlash)，`muse-glimmer-30b` |
@@ -34,7 +34,7 @@
 
 > 已删（2026-09-21，不可恢复）：`lmstudio-community/Qwen3-VL-8B-Instruct-GGUF`（5.76 GB）、
 > `mradermacher/Qwen3-Reranker-8B-GGUF`（4.47 GB）、`mradermacher/Qwen3-VL-Reranker-2B-GGUF`（2.47 GB）、
-> `Qwen3-VL-Reranker-2B-archlib-q8_0.gguf`（0.41 GB）。合计 12.4 GB。
+> 旧定制 2B reranker GGUF（0.41 GB）。合计 12.4 GB。
 
 ## Muse Glimmer 30B 参数
 

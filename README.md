@@ -1,6 +1,6 @@
-# local-models-mcp
+# local-model
 
-本地多模态 RAG 系统。MCP 做原子工具层，Skill 做 RAG 编排层。全链路本地运行，所有模型跑在 GPU 上。
+本地多模态 RAG 系统。`scripts/cli.py` 是统一命令入口，`scripts/` 承担解析、索引、检索与模型调用；模型通过本机 llama-swap 按需运行。
 
 ## 架构图
 
@@ -12,25 +12,21 @@
 flowchart TB
     IN["用户文件<br/>PDF / Word / Excel / PPT / 图片 / 文本"]
 
-    subgraph SKILL["skill/ · RAG 编排层"]
+    CLI["scripts/cli.py<br/>统一命令入口"]
+
+    subgraph SKILL["scripts/ · RAG 实现层"]
         direction TB
         ING["ingest.py<br/>文件解析"]
         CHK["chunker.py<br/>智能分块"]
-        IDX["rag_indexer.py<br/>索引编排（增量 + 新鲜度 + 知识图谱）"]
+        IDX["rag_indexer.py<br/>索引编排（增量 + 新鲜度）"]
         RET["rag_retriever.py<br/>混合召回 → RRF → rerank"]
-        KG["knowledge_graph.py<br/>实体 + 关系"]
         ENH["rag_enhance.py<br/>查询改写 / 摘要"]
         ING --> CHK --> IDX
-    end
-
-    subgraph MCP["mcp/ · 纯 stdio 适配层（薄入口，不实现业务）"]
-        SRV["server.py（FastMCP）<br/>search / index / list_kbs → 委托 skill<br/>embed / rerank / status → rag_client<br/>ocr、list/load/unload_model 独立保留"]
     end
 
     subgraph STORE["向量存储 · LanceDB"]
         T1["kb_{name}<br/>文本 4096 维"]
         T2["kb_{name}_images<br/>页面图 2048 维"]
-        T3["kg_{name}<br/>知识图谱"]
     end
 
     subgraph MODELS["本地模型服务（GPU）"]
@@ -38,22 +34,18 @@ flowchart TB
         MG["Muse Glimmer（同入口 9123）<br/>CUDA + DFlash + Vision<br/>对话 / OCR / 视觉理解<br/>muse-glimmer-30b · ttl 900"]
     end
 
-    IN --> SKILL
+    IN --> CLI --> SKILL
     IDX -->|embed_images| STORE
     IDX -->|embed_texts| STORE
     RET --> STORE
-    KG --> T3
     RET -->|embed + rerank| LS
     IDX -->|embed| LS
     ING -->|扫描页 OCR / 图片理解| MG
     ENH -->|查询改写 / 摘要| MG
-    SKILL --> MCP
-    MCP --> MODELS
+    SKILL --> MODELS
 ```
 
-**三层职责：** `skill/` 是唯一实现层（所有业务逻辑）；`mcp/` 只做 stdio 协议适配 +
-参数校验 + 调用 Skill 公共 API；`backends/` 只保留 Skill 层没有的能力（外部图文检索、
-共享重试、模型管理）。详见 [`AGENTS.md`](AGENTS.md)。
+**职责边界：** `scripts/cli.py` 只负责参数解析和命令分发，业务逻辑在其余 `scripts/` 模块；模型服务与生命周期由外部 llama-swap 配置管理。已退役的 local-models MCP 不再是入口。详见 [`AGENTS.md`](AGENTS.md)。
 
 
 ## 模型选型
@@ -115,8 +107,7 @@ flowchart TB
 ~/.local-rag/
 ├── lancedb/                    # LanceDB 数据库（向量+全文索引）
 │   ├── kb_{name}.lance/        # 文本向量表（4096维）
-│   ├── kb_{name}_images.lance/ # 图片向量表（2048维）
-│   └── kg_{name}.lance/        # 知识图谱表（实体+关系）
+│   └── kb_{name}_images.lance/ # 图片向量表（2048维）
 ├── pdf-cache/                  # PDF 渲染缓存（WebP）
 │   └── <pdf_sha256>/           # 按 PDF 内容哈希分目录
 │       ├── page_001.webp
@@ -131,7 +122,7 @@ flowchart TB
 - 知识库配置（registry.yaml）在项目目录中，随 git 版本管理
 
 **清理策略：**
-- `cli.py --kb <name> index --prune`：索引时自动删除已不存在文件的 chunks（孤儿清理）
+- `cli.py --kb <name> index`：默认删除已不存在文件的 chunks；仅明确需要保留时使用 `--no-prune`
 - PDF 缓存按 sha256 分目录，PDF 文件删除后缓存不会自动清理；手动删除 `~/.local-rag/pdf-cache/<sha256>/`
 - 临时文件 `~/.local-rag/tmp/` 可随时删除（不影响索引）
 
@@ -143,7 +134,7 @@ flowchart TB
 **损坏恢复：**
 - LanceDB 表损坏：删除对应 `.lance/` 目录后 `--force` 重建
 - FTS 索引损坏：`cli.py --kb <name> index --force`（全量重建），或删除表后重建（`optimize` 子命令不存在）
-- 并发写入冲突：索引操作有 PID 文件锁，冲突时等待或杀掉旧进程
+- 并发写入冲突：索引操作有 PID 文件锁；先核对所属进程，只清理确认属于本任务的残留锁或进程
 
 **版本管理：**
 - LanceDB 版本升级后可能需要全量重建（`index --force`）
@@ -249,12 +240,6 @@ agent 友好格式: [序号] 标题路径 (score=0.85, rerank) + source + 完整
 ```
 
 返回：图片路径、页码、webp 缓存路径、页面描述、相似度 score。
-
-### 知识图谱补充
-
-向量检索找"语义相似"，知识图谱找"实体关联"：
-> ⚠️ `kg *` 系列命令**已砍掉**（2026-09-21 核实：`cli.py --help` 里没有）。
-> 实体仍会在 `index --extract-entities` 时被抽出，但**读取端已不存在**。
 
 ## PDF 入库策略
 
@@ -403,7 +388,7 @@ skill\.venv\Scripts\python.exe skill\scripts\cli.py --kb my_docs freshness
 
 | 命令 | 用途 |
 |---|---|
-| `index` | 增量建索引（支持 `--force` 全量重建、`--extract-entities` 知识图谱） |
+| `index` | 增量建索引（支持 `--force` 全量重建、`--no-prune` 保留孤儿 chunks） |
 | `freshness` | 检查索引新鲜度（非零退出码=过期） |
 | `stats` | 查看索引统计（chunk数、文件数、文档类型分布） |
 | `retrieve` | 混合检索 + rerank（真实 flag：`--kb all` 跨库、`--mode hybrid/semantic/keyword`、`--top-k`、`--no-rerank`、`--path-filter`、`--explain` 分数、`--trace out.html` 推理链） |
@@ -414,11 +399,11 @@ skill\.venv\Scripts\python.exe skill\scripts\cli.py --kb my_docs freshness
 | `summary` | 文档摘要（标题+摘要+标签+实体） |
 | `embed` | 直接调用 embedding（调试用） |
 | `rerank` | 直接调用 rerank（调试用） |
-| `doctor` | 系统诊断（依赖状态+GPU状态+模型可用性+索引覆盖+过期库） |
+| `doctor` | 完整诊断；会做真实 embedding 检查并可能初始化存储，不是只读探活 |
 
 ## 知识库注册表
 
-`skill/registry.yaml` 是唯一真相源。新增库 = 加一段配置：
+`skill/registry.yaml` 提供公开示例；本机真实库写入同目录、未入 Git 的 `registry.local.yaml`，加载时按库名覆盖示例。新增公开示例可加一段配置：
 
 ```yaml
 knowledge_bases:
@@ -583,7 +568,7 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 - 16K 上下文（单槽）：够读单模块；跨仓库检索走 9123 的向量检索而非全塞上下文
 - 推理模型：先生成 reasoning_content，再生成 content
 
-用 `cli.py doctor` 一键确认 GPU 型号、驱动、利用率、显存占用和当前加载模型。
+需要完整诊断时使用 `cli.py doctor`；它会发起真实 embedding 检查并可能初始化存储。只看已加载模型时使用 `scripts/status.py` 或读取 llama-swap 的 `/running`。
 
 ## 红线
 
@@ -597,39 +582,31 @@ $MuseDir  = "<MODELS_DIR>\Muse"     # 模型目录，例：C:\models\Muse
 
 <仓库根>/
 ├── README.md                    # 本文件
-├── AGENTS.md                    # agent 操作指南
+├── AGENTS.md                    # 公开包装层的 agent 路由
 ├── LICENSE                      # MIT
 ├── .github/workflows/test.yml   # CI：pytest -m "not integration"
-├── skill/                       # RAG 编排层
-│   ├── SKILL.md                 # agent 指南（skill 运行时读本文件）
-│   ├── setup.ps1                # 一键安装（venv+依赖+验证）
-│   ├── registry.yaml            # 知识库注册表（唯一真相源，只放示例）
-│   ├── registry.local.yaml      # 本机私有库（不进 git，默认不存在）
-│   ├── pyproject.toml
-│   ├── requirements.txt
-│   ├── kb-manifest-schema.md    # 垂类库 manifest 规范
-│   ├── references/
-│   │   └── full-workflow.md     # 底层实现参考（配置陷阱/冷加载/Vulkan vs CUDA）
-│   ├── scripts/
-│   │   ├── __init__.py          # 公共 API（外部项目可直接 import）
-│   │   ├── cli.py               # 统一入口（12 个顶层子命令，无叶子子命令）
-│   │   ├── ingest.py            # 文件解析（PDF WebP+HTML重组/VLM/全格式）
-│   │   ├── chunker.py           # 智能分块（按标题/段落）
-│   │   ├── rag_indexer.py       # 索引编排（增量+新鲜度+KG+图向量）
-│   │   ├── rag_retriever.py     # 混合检索+rerank+跨库
-│   │   ├── vector_store.py      # LanceDB 向量存储（文本表+图片表+维度校验）
-│   │   ├── rag_client.py        # embedding/rerank HTTP 客户端（重试+单图隔离+多格式）
-│   │   ├── rag_enhance.py       # 查询改写+文档摘要
-│   │   ├── knowledge_graph.py   # 知识图谱（实体+关系）
-│   │   └── visualize.py         # 交互式 HTML 可视化
-│   └── tests/                   # 测试 + fixtures
-└── mcp/                         # 纯 stdio 适配层（薄入口，委托 Skill 层）
-    ├── server.py                # FastMCP stdio：参数校验 + 调 Skill API + 输出
-    ├── indexer.py               # DEPRECATED 旧 SQLite 索引器（server.py 不引用）
-    ├── kbs.yaml                 # deprecated（向后兼容 fallback）
-    ├── README.md
-    ├── backends/                # 外部图文检索适配 / 共享重试 / 模型管理
-    └── tests/
+└── skill/
+    ├── SKILL.md                 # Skill 入口
+    ├── AGENTS.md                # Skill 真相源路由
+    ├── setup.ps1                # 一键安装（venv + 依赖 + 验证）
+    ├── registry.yaml            # 公开示例注册表
+    ├── registry.local.yaml      # 本机覆盖（gitignore，默认不存在）
+    ├── kb-manifest-schema.md    # 垂类库 manifest 规范
+    ├── references/              # 完整工作流与设计背景
+    ├── rules/                   # 注册表、红线、排障与开发规则
+    ├── scripts/
+    │   ├── cli.py               # 统一命令入口
+    │   ├── ingest.py            # 文件解析
+    │   ├── chunker.py           # 智能分块
+    │   ├── rag_indexer.py       # 增量索引与新鲜度
+    │   ├── rag_retriever.py     # 混合检索与 rerank
+    │   ├── vector_store.py      # LanceDB 向量存储
+    │   ├── rag_client.py        # embedding/rerank HTTP 客户端
+    │   ├── rag_enhance.py       # 查询改写与文档摘要
+    │   └── status.py            # 不触发模型加载的状态查询
+    ├── system/                  # 提示词真相源
+    ├── tools/                   # CLI 使用说明
+    └── tests/                   # 测试与 fixtures
 ```
 
 ## 许可证

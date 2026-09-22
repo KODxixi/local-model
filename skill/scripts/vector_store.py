@@ -1,4 +1,4 @@
-﻿"""LanceDB 向量存储：替代 SQLite 暴力搜索的 ANN 索引。
+"""LanceDB 向量存储：替代 SQLite 暴力搜索的 ANN 索引。
 
 设计原则：
 - 每个知识库一个 LanceDB table（按 kb name）
@@ -38,9 +38,9 @@ import pyarrow as pa
 # 模块级常量（唯一来源；任何函数默认值/阈值都引用这里，禁止散落硬编码）
 # ---------------------------------------------------------------------------
 
-#: 默认文本 embedding 模型（text-embedding-qwen3-embedding-8b）及其输出维度
-DEFAULT_TEXT_EMBED_MODEL = "text-embedding-qwen3-embedding-8b"
-DEFAULT_TEXT_EMBED_DIM = 4096
+#: 默认文本 embedding 模型（Qwen3 Embedding 0.6B）及其输出维度；领域案例 视觉库独立管理。
+DEFAULT_TEXT_EMBED_MODEL = "text-embedding-qwen3-embedding-0.6b"
+DEFAULT_TEXT_EMBED_DIM = 1024
 
 #: 默认图片 embedding 模型（vl-embedding-2b）及其输出维度
 DEFAULT_IMAGE_EMBED_MODEL = "vl-embedding-2b"
@@ -355,7 +355,7 @@ class LanceDBVectorStore:
             raise ValueError(
                 f"向量维度不匹配: 表 'kb_{self.kb_name}' 定义 {self.dimensions} 维, "
                 f"实际输入 {actual_dim} 维。"
-                f"可能是降级链切换了模型（如 llama-swap 4096维 → 其他 embedding 后端（如 768维））。"
+                f"可能是模型或注册表切换导致文本向量空间不一致。"
                 f"请检查 registry.yaml 的 embed_model/dimensions 配置，"
                 f"或使用 embed_texts(include_dimensions=True) 检测维度变化。"
             )
@@ -395,15 +395,9 @@ class LanceDBVectorStore:
             try:
                 self._table.delete(where)
                 deleted += 1
-            except Exception:
-                # Fallback: 旧版 LanceDB 不支持 NOT IN 时退化为按 path 删，
-                # 保持历史行为（可能误删刚写入的行，但不丢新批次）。
-                try:
-                    self._table.delete(f"path = '{escaped_path}'")
-                    deleted += 1
-                except Exception as exc2:
-                    print(f"[vector_store] 删除旧 chunk 失败 path={path}: {exc2}",
-                          file=sys.stderr)
+            except Exception as exc:
+                # 不按 path 兜底删除：那会在写入失败后误删刚写入的新行。
+                raise RuntimeError(f"删除旧 chunk 失败 path={path}") from exc
         return deleted
 
     def delete_by_path(self, path: str) -> int:

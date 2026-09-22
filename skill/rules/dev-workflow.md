@@ -35,13 +35,16 @@ powershell -ExecutionPolicy Bypass -File <SKILL_ROOT>\setup.ps1
 
 ## 文档与发布（维护者）
 
-本仓库是公开镜像，**同步 = 纯拷贝，不要在本仓库手工改副本**：
+公开仓库是受管镜像，**同步 = 单向映射，不要在公开仓库手工改副本**。唯一入口是
+[`sync-local-models-public.ps1`](C:/AI/tools/governance/sync-local-models-public.ps1)：
 
-| 本仓库路径 | 来源 |
+| 公开仓库路径 | 母本来源 |
 |---|---|
-| `README.md` / `AGENTS.md` | skill 层目录根的 `README.md` / `AGENTS.md` |
-| `scripts/**` | skill 层 scripts 目录 |
-| `system/**` / `rules/**` / `tools/**` | skill 层对应目录 |
-| `LICENSE`、`.github/workflows/`、根 `.gitignore` | **仅本仓库所有**，母库无对应文件 |
+| `README.md` | 本目录的 `README.md` |
+| `skill/AGENTS.md` / `skill/SKILL.md` | 本目录的 `AGENTS.md` / `SKILL.md` |
+| `skill/scripts/**` | 本目录的 `scripts/**` |
+| `skill/system/**` / `skill/rules/**` / `skill/tools/**` | 本目录的对应目录 |
+| `LICENSE`、`.github/workflows/`、根 `AGENTS.md` / `.gitignore` | **仅公开仓库所有**，同步脚本保留 |
+| `skill/.gitignore` | 本目录的 `.gitignore` |
 
-发布前自检：在仓库根执行 `git grep -nE "C:\\\\Users|<你的私有目录名>"` 应为 0 命中。
+发布前以同步脚本内的私有标识预检为准；命中时先修母本，不得绕过检查或直接改公开副本。

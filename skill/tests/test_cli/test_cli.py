@@ -78,8 +78,6 @@ def test_each_command_parses(cmd: str):
         "summary": ["f.md"],
         "embed": ["text"],
         "rerank": ["q", "--docs", "a", "b"],
-        "migrate": ["--sqlite", "x.db"],
-        "optimize": [],
         "doctor": [],
     }
     args = ap.parse_args([cmd, *minimal[cmd]])
@@ -181,7 +179,7 @@ def test_error_output_json_format(capsys):
     """未知 KB 时 stderr 输出 {"error": {code, message, fix}}。"""
     args = SimpleNamespace(
         json=True, registry="registry.yaml", db="C:\\tmp\\lancedb",
-        kb="nope", force=False, no_prune=False, extract_entities=False,
+        kb="nope", force=False, no_prune=False,
     )
     with patch.object(cli, "load_registry", return_value={"real": _fake_kb()}):
         rc = cmd_index(args)
@@ -194,6 +192,16 @@ def test_error_output_json_format(capsys):
     assert "message" in payload["error"]
     assert "fix" in payload["error"]
     assert payload["error"]["kb"] == "nope"
+
+
+def test_retired_extract_entities_flag_is_not_advertised():
+    """已删除的知识图谱实现不能继续暴露为可调用 CLI。"""
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    assert "--extract-entities" not in subparsers.choices["index"].format_help()
 
 
 # ---------------------------------------------------------------------------

@@ -89,10 +89,10 @@ def _dedup_key(r: dict[str, Any]) -> str:
     后文不同的两个片段会被误合并。完整内容哈希避免此问题。
     """
     cid = r.get("chunk_id")
-    if cid:
-        return str(cid)
-    text = r.get("text", "") or ""
     path = r.get("path", "") or ""
+    if cid:
+        return f"{path}\x00{cid}"
+    text = r.get("text", "") or ""
     return f"{path}#{hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]}"
 
 
@@ -986,7 +986,7 @@ def retrieve(
     registry = load_registry(registry_path)
     if kb_name not in registry:
         raise ValueError(f"未知知识库 {kb_name!r}；可用: {', '.join(registry)}")
-    retriever = RAGRetriever(registry[kb_name], db_path=db_path)
+    retriever = RAGRetriever(registry[kb_name], db_path=db_path, registry_path=registry_path)
     return retriever.retrieve(query, top_k=top_k, mode=mode, **kwargs)
 
 
@@ -1013,7 +1013,7 @@ if __name__ == "__main__":
         print(f"ERROR: 知识库 {args.kb!r} 不存在。可用: {', '.join(registry)}", file=sys.stderr)
         sys.exit(1)
 
-    retriever = RAGRetriever(registry[args.kb])
+    retriever = RAGRetriever(registry[args.kb], registry_path=args.registry)
     results = retriever.retrieve(
         args.query,
         top_k=args.top_k,

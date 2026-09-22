@@ -108,14 +108,14 @@ def test_dedup_key_identical_chunks_same_key():
     assert _dedup_key(r1) == _dedup_key(r2)
 
 
-def test_dedup_key_chunk_id_takes_priority():
-    """有 chunk_id 时优先用 chunk_id，不依赖 path+text。"""
+def test_dedup_key_chunk_id_is_scoped_to_path():
+    """chunk_id 在不同文件中可重复，去重键必须包含路径。"""
     from rag_retriever import _dedup_key
 
     r1 = {"chunk_id": "id-1", "path": "/a.md", "text": "内容A"}
     r2 = {"chunk_id": "id-1", "path": "/b.md", "text": "完全不同的内容B"}
 
-    assert _dedup_key(r1) == _dedup_key(r2), "同 chunk_id 应视为同一片段"
+    assert _dedup_key(r1) != _dedup_key(r2), "不同文件的同编号片段不能合并"
 
 
 # ---------------------------------------------------------------------------

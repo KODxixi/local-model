@@ -22,12 +22,12 @@ import urllib.request
 LAP = "http://127.0.0.1:9123"
 # 会触发 exclusive 驱逐的（读自 config.yaml 的 groups）
 EMBED_GROUPS = {
-    "text-embedding-qwen3-embedding-8b": "vl-embedding-2b",
-    "vl-embedding-2b": "text-embedding-qwen3-embedding-8b",
+    "text-embedding-qwen3-embedding-0.6b": "vl-embedding-2b",
+    "vl-embedding-2b": "text-embedding-qwen3-embedding-0.6b",
 }
 PERSISTENT = {"vl-reranker-2b", "muse-glimmer-30b"}
 COLD = {
-    "text-embedding-qwen3-embedding-8b": "4.29s",
+    "text-embedding-qwen3-embedding-0.6b": "runtime-dependent",
     "vl-embedding-2b": "12.31s",
     "vl-reranker-2b": "16.27s",
     "muse-glimmer-30b": "~54s",
@@ -89,7 +89,7 @@ def main() -> int:
     else:
         print("  muse-glimmer-30b: 未加载 —— 下一个请求会触发冷加载（~54s）")
     print("  ⚠️ 该模型 `--parallel 1` 单槽：**客户端并发必须 = 1**，多发只会排队，")
-    print("     排队时间叠加到客户端超时上（archlib 打标 timeout=90s）")
+    print("     排队时间叠加到客户端超时上（图文打标客户端 timeout=90s）")
 
     used, free = gpu()
     print("\n【显存（nvidia-smi 现读）】")
@@ -106,12 +106,12 @@ def main() -> int:
     for want, victim in EMBED_GROUPS.items():
         print(f"    加载 {want:38s} → 会驱逐 {victim}")
     print("    （vl-reranker-2b 与 muse-glimmer-30b 是 persistent，不会被驱逐）")
-    print("  ⚠️ 被驱逐后再调用要付冷加载（见下表）—— OpenClaw memory_search 有**不可配的 30s 硬上限**。")
+    print("  ⚠️ 被驱逐后再调用要付冷加载（见下表）—— 上游 memory_search 有**不可配的 30s 硬上限**。")
     print("     会触发的事：`--kb <图文库>` / `search-image` / `verify-local-models.ps1 -Live`。")
     print("     （`--kb all` 已默认跳过 multimodal 库。）")
 
     print("\n【冷加载代价】")
-    for k in ("muse-glimmer-30b", "vl-embedding-2b", "vl-reranker-2b", "text-embedding-qwen3-embedding-8b"):
+    for k in ("muse-glimmer-30b", "vl-embedding-2b", "vl-reranker-2b", "text-embedding-qwen3-embedding-0.6b"):
         print(f"    {k:38s} {COLD.get(k, '?')}")
 
     print("\n" + "=" * 70)

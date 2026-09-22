@@ -3,13 +3,13 @@ name: local-model
 description: |
   本地 RAG 系统统一入口：文件解析、智能分块、向量索引、混合检索与重排。
   需要构建文本知识库、语义检索、召回文档或核查本地索引时使用。
-  建筑案例 PDF 标准打标与入库先走 archcase / Archlib 工程入口；不以通用解析替代。
+  建筑案例 PDF 标准打标与入库先走宿主环境的领域工程入口；不以通用解析替代。
   不用于网页搜索、外部模型调用或未经授权的共享服务管理。
 ---
 
 # local-model
 
-将本地文件变成可检索语料。调用统一走 [scripts/cli.py](scripts/cli.py)；参数和默认值以实际 --help 为准。
+将本地文件变成可检索语料。文本库默认使用 `text-embedding-qwen3-embedding-0.6b`，实际输出 1024 维；调用统一走 [scripts/cli.py](scripts/cli.py)，参数和默认值以实际 --help 为准。领域案例 图文库是宿主领域索引，独立保留 2048 维，不由本 Skill 重建。
 权威文件分工见 [AGENTS.md](AGENTS.md)，本入口不复制模型启动参数、显存数字和打标配置。
 
 ## 先选动作
@@ -19,7 +19,7 @@ description: |
 | 精确路径、偏好、配置事实 | 按 [知识读取协议](C:/AI/rules/knowledge-io.md) 直读 canonical，无需向量化 |
 | 语义资料或显式关键词查询 | 看 [注册表说明](rules/registry.md)，选定一个域库，再 retrieve |
 | 文本知识建索引 | 获授权后 index；默认增量，可能清理孤儿 chunks |
-| 建筑案例 PDF 打标、核心页及图文入库 | [archcase](../archcase/SKILL.md)，按其工程指针进入 Archlib 标准流程 |
+| 建筑案例 PDF 打标、核心页及图文入库 | 按 [AGENTS.md](AGENTS.md) 指针交回宿主环境的领域流程 |
 | 通用文件解析 | ingest / chunk；扫描 PDF、图片可能调用本地视觉模型 |
 | 状态查询 | [命令说明](tools/cli-commands.md#状态查询与副作用)；doctor 包含推理和存储初始化 |
 
@@ -44,17 +44,19 @@ $RagPython = Join-Path $SkillRoot '.venv\Scripts\python.exe'
 
 ```powershell
 # 统计已有文本库；库名按本机注册表替换
-& $RagPython -B "$SkillRoot\scripts\cli.py" --kb openclaw --json stats
+& $RagPython -B "$SkillRoot\scripts\cli.py" --kb my_docs --json stats
 # 明确关键词查询，不调用模型
-& $RagPython -B "$SkillRoot\scripts\cli.py" --kb openclaw --json retrieve '查询内容' --mode keyword --top-k 3
+& $RagPython -B "$SkillRoot\scripts\cli.py" --kb my_docs --json retrieve '查询内容' --mode keyword --top-k 3
 # 语义 + 关键词 + 精排；只使用已配置的本地模型
-& $RagPython -B "$SkillRoot\scripts\cli.py" --kb openclaw --json retrieve '查询内容' --top-k 3
+& $RagPython -B "$SkillRoot\scripts\cli.py" --kb my_docs --json retrieve '查询内容' --top-k 3
 ```
 
 全部命令、索引与检索参数见 [tools/cli-commands.md](tools/cli-commands.md)。缺依赖、连接失败或结果为空按 [故障排查](rules/troubleshooting.md) 定位，不切外部模型、不自动换模型或重建生产索引。
 
 ## 边界与验收
 
+- 文本库的目标 schema 是 1024 维；注册表改为 1024 不会转换已有 4096 向量。旧表必须从原始资料 shadow 重建，验收通过后再切换；不要向旧表追加新维度，也不要截断旧向量。
+- `vl-embedding-2b` 的 领域案例 图文库由宿主工程独立维护，当前 2048 维；本 Skill 不把它当文本库、不替它重建。
 - 调用前遵守 [红线](rules/redlines.md)：检索/重排使用本地 local-model；模型显存、互斥与并发按实际配置，不自行启动第二份模型服务。
 - 原文件是事实源，索引是可再生投影；命中后回源核对。新增、更新或删除知识按 [knowledge-io.md](C:/AI/rules/knowledge-io.md) 验证索引及检索。
 - `stats` / `retrieve` 会打开存储；不存在的表可能初始化，首次关键词查询可能建 FTS。严格只读检查先确认库与表存在，勿拿错误 --db 路径试跑。

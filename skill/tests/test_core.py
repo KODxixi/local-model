@@ -279,8 +279,3 @@ def test_vector_store_delete_by_path():
 
         store.delete_by_path("/delete.md")
         assert store.count() == 1
-
-
-# ---------------------------------------------------------------------------
-# knowledge_graph tests
-# ---------------------------------------------------------------------------
