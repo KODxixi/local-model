@@ -7,7 +7,7 @@
 | 决策 | 理由 |
 |------|------|
 | LanceDB 替代 SQLite | ANN 检索 vs 全表扫描，列式存储压缩率高，无锁并发 |
-| 文本表1024维 + 领域案例图片表2048维分离 | 不同模型维度不同，混在一张表会导致维度冲突；领域案例由宿主工程独立管理 |
+| 通用文本表与 领域 图文表独立管理 | 向量空间不能混用；领域 的当前状态、后续升级目标与门禁见 [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md) |
 | Table.optimize() 替代 compact_files() | 消除 deprecated warning，使用 LanceDB 推荐的新 API |
 | FTS 索引懒加载 | 首次 keyword_search 时自动创建，不需要手动建索引 |
 

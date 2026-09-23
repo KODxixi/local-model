@@ -387,7 +387,7 @@ def _merge_small_chunks(chunks: list[Chunk], min_chars: int) -> list[Chunk]:
 # 通用分块入口（自动识别格式）
 # ---------------------------------------------------------------------------
 
-def chunk_document(
+def _chunk_document(
     content: str,
     *,
     doc_type: str = "text",
@@ -421,6 +421,48 @@ def chunk_document(
 
     # 默认
     return chunk_markdown(content, max_chars=max_chars, doc_metadata=doc_metadata)
+
+
+def chunk_document(
+    content: str,
+    *,
+    doc_type: str = "text",
+    max_chars: int = DEFAULT_MAX_CHARS,
+    doc_metadata: dict[str, Any] | None = None,
+    max_utf8_bytes: int = 1800,
+) -> list[Chunk]:
+    """Structure-aware chunks with a hard bound, including tables/code.
+
+    ponytail: UTF-8 bytes conservatively bound byte-tokenizer input; replace
+    with the deployed tokenizer if larger chunks measurably improve recall.
+    1800 leaves headroom under the current 2048 embedding microbatch.
+    """
+    if max_chars < 1 or max_utf8_bytes < 4:
+        raise ValueError("max_chars must be positive; max_utf8_bytes must be >= 4")
+    result = []
+    for chunk in _chunk_document(content, doc_type=doc_type, max_chars=max_chars,
+                                 doc_metadata=doc_metadata):
+        start = 0
+        part = 0
+        while start < len(chunk.text):
+            end = start
+            size = 0
+            while end < len(chunk.text) and end - start < max_chars:
+                width = len(chunk.text[end].encode("utf-8"))
+                if size + width > max_utf8_bytes:
+                    break
+                size += width
+                end += 1
+            meta = dict(chunk.metadata)
+            meta["parent_chunk_id"] = chunk.chunk_id
+            meta["part"] = part
+            result.append(Chunk(text=chunk.text[start:end], metadata=meta,
+                                chunk_id=f"{chunk.chunk_id}-part-{part:04d}",
+                                start_pos=chunk.start_pos + start,
+                                end_pos=chunk.start_pos + end))
+            start = end
+            part += 1
+    return result
 
 
 def _chunk_spreadsheet(

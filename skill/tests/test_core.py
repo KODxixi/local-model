@@ -260,6 +260,24 @@ def test_vector_store_incremental_update():
         assert results[0]["text"] == "new"
 
 
+def test_vector_store_upsert_replaces_same_chunk_id():
+    """Reindexing an unchanged chunk id must replace its old row, not duplicate it."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = VectorStore(tmpdir, "test_same_chunk_id", dimensions=4, model="test")
+        old = {"vector": [1.0, 0, 0, 0], "chunk_id": "stable-id", "text": "old",
+               "path": "/same.md", "doc_type": "text", "heading_path": [],
+               "section_title": "", "start_line": 1, "end_line": 1,
+               "mtime_ns": 100, "metadata": {}}
+        new = {**old, "vector": [0, 1.0, 0, 0], "text": "new", "mtime_ns": 200}
+
+        store.upsert_chunks([old])
+        store.upsert_chunks([new])
+
+        assert store.count() == 1
+        rows = store.table.to_arrow().select(["chunk_id", "text", "mtime_ns"]).to_pylist()
+        assert rows == [{"chunk_id": "stable-id", "text": "new", "mtime_ns": 200}]
+
+
 def test_vector_store_delete_by_path():
     """按路径删除。"""
     with tempfile.TemporaryDirectory() as tmpdir:

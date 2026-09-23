@@ -30,6 +30,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+from uuid import uuid4
 
 import lancedb
 import pyarrow as pa
@@ -325,14 +326,21 @@ class LanceDBVectorStore:
 
         rows = [self._normalize_chunk_row(c) for c in chunks]
         paths = list({r["path"] for r in rows})
-        new_chunk_ids_by_path: dict[str, set[str]] = {}
-        for r in rows:
-            new_chunk_ids_by_path.setdefault(r["path"], set()).add(r["chunk_id"])
 
-        # 1) 先写入新行
+        # 先用临时 ID 写入新批次，避免同一 chunk_id 的旧行和新行无法区分。
+        # 若在中途崩溃，临时行仍包含完整新数据；下次 upsert 会将其一并清理。
+        token = uuid4().hex
+        staged_rows = []
+        for i, row in enumerate(rows):
+            staged_rows.append({**row, "chunk_id": f"__upsert_{token}_{i}"})
+
+        paths_sql = ", ".join(f"'{_escape_sql(path)}'" for path in paths)
+        staged_sql = ", ".join(f"'{row['chunk_id']}'" for row in staged_rows)
+        self._table.add(staged_rows)
+        self._table.delete(f"path IN ({paths_sql}) AND chunk_id NOT IN ({staged_sql})")
         self._table.add(rows)
-        # 2) 再删除旧行
-        deleted = self._delete_stale_rows(paths, new_chunk_ids_by_path)
+        self._table.delete(f"chunk_id IN ({staged_sql})")
+        deleted = len(paths)
 
         total = self.count()
         if total > INDEX_UPSERT_TRIGGER_ROWS:
@@ -376,29 +384,6 @@ class LanceDBVectorStore:
             "model": c.get("model", self.model),
             "metadata": json.dumps(c.get("metadata", {}), ensure_ascii=False),
         }
-
-    def _delete_stale_rows(
-        self,
-        paths: list[str],
-        new_chunk_ids_by_path: dict[str, set[str]],
-    ) -> int:
-        """删除同 path 下不在新批次 chunk_id 集合中的旧行，返回清理过的 path 数。"""
-        deleted = 0
-        for path in paths:
-            cids = new_chunk_ids_by_path.get(path, set())
-            escaped_path = _escape_sql(path)
-            if cids:
-                in_list = ", ".join(f"'{_escape_sql(c)}'" for c in cids)
-                where = f"path = '{escaped_path}' AND chunk_id NOT IN ({in_list})"
-            else:
-                where = f"path = '{escaped_path}'"
-            try:
-                self._table.delete(where)
-                deleted += 1
-            except Exception as exc:
-                # 不按 path 兜底删除：那会在写入失败后误删刚写入的新行。
-                raise RuntimeError(f"删除旧 chunk 失败 path={path}") from exc
-        return deleted
 
     def delete_by_path(self, path: str) -> int:
         """删除指定路径的所有 chunks。

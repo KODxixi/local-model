@@ -16,7 +16,7 @@
 | 模型 | 用途 | 维度 | 端点 |
 |------|------|------|------|
 | text-embedding-qwen3-embedding-0.6b | 文字向量 | 1024 | 检索端点（llama-swap 9123） |
-| vl-embedding-2b | 图向量 | 2048 | 检索端点（llama-swap 9123） |
+| vl-embedding-2b | 宿主当前图文向量 | 2048 | 检索端点（llama-swap 9123） |
 | vl-reranker-2b | **文本 + 图文精排（共用）** | - | 检索端点（llama-swap 9123） |
 | Muse Glimmer 30B + DFlash + Vision | 对话/视觉主模型（`ttl: 900` 空闲自卸） | - | llama-swap 9123 (CUDA + DFlash)，`muse-glimmer-30b` |
 
@@ -29,7 +29,7 @@
 
 | 模型 | 大小 | 状态 |
 |---|---|---|
-| `VesNFF/Qwen3-VL-Embedding-8B-GGUF`（Q6_K + mmproj） | 6.87 GB | **储备**：未登记任何端点。是"图文检索升级 ViDoRe +5.9"的采购（需 safetensors 8B 自转 GGUF，本地只有 2B safetensors）。2026-09-21 审计时确认保留，理由：删不可逆、占 0 显存、重下成本高 |
+| `VesNFF/Qwen3-VL-Embedding-8B-GGUF`（Q6_K + mmproj） | 6.87 GB | 宿主图文库升级候选，尚未登记或验证；目标与门禁见 [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md)。模型是否需自转以实测为准 |
 | `Qwen/Voodisss-Qwen3-Reranker-8B`（Q4_K_M） | 4.36 GB | **备用**：2026-09-21 起不在 config.yaml 登记（与常驻 30B 算术冲突）。要启用必须先手工卸下 30B（`curl -X POST 127.0.0.1:9123/api/models/unload/muse-glimmer-30b`） |
 
 > 已删（2026-09-21，不可恢复）：`lmstudio-community/Qwen3-VL-8B-Instruct-GGUF`（5.76 GB）、

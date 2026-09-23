@@ -14,8 +14,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-pytestmark = pytest.mark.skip(reason="bm25 回归测试需要真实 LanceDB")
 from rag_retriever import KBConfig, RAGRetriever
 
 # conftest 已把 scripts/ 加入 sys.path

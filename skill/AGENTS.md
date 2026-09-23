@@ -9,7 +9,7 @@
 | 第一次调用、安装依赖、确认权限边界 | [SKILL.md](SKILL.md) |
 | 选知识库、看本机配置如何覆盖模板 | [注册表说明](rules/registry.md)；实际加载逻辑见 [rag_indexer.py](scripts/rag_indexer.py) 的 load_registry |
 | 查已有文本库条数、运行检索、查看参数 | [CLI 命令](tools/cli-commands.md)；参数最终以 [cli.py](scripts/cli.py) 的 --help 为准 |
-| 查领域图文库或进行标准 PDF 打标入库 | 走宿主环境的建筑案例任务入口；不得用通用文本库 stats 的 0 断言图文库为空 |
+| 查领域图文库状态、升级模型或标准 PDF 打标入库 | 宿主领域工程的 AGENTS.md；迁移目标见 [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md)，不得用通用文本库 stats 的 0 断言图文库为空 |
 | 查服务登记与已加载状态 | [CLI 的状态查询](tools/cli-commands.md#状态查询与副作用) |
 | 改模型配置、并发或显存参数 | [显存和端点红线](rules/redlines.md)，再读下方权威分工 |
 | 查询失败、索引锁、缺依赖 | [故障排查](rules/troubleshooting.md) |
