@@ -22,7 +22,8 @@
 |------|----------|
 | `向量维度不匹配` | 降级链切换了模型。检查 `registry.yaml` 的 `embed_model` 和 `dimensions` 是否一致 |
 | 单张图片嵌入返回零向量 | 图片损坏/格式不支持，已被单图失败隔离。用 `all(v==0 for v in vector)` 检测并过滤 |
-| 关键词检索返回空 | 确认 LanceDB 表有 INVERTED FTS 索引。跑 `cli.py --kb <name> index --force` 重建索引（`optimize` 子命令不存在） |
+| 关键词检索**报错** | 2026-10-15 起检索失败会**抛错**、不再静默返回空。确认表有 INVERTED FTS 索引；跑 `cli.py --kb <name> index --force` 重建（`optimize` 子命令不存在） |
+| 关键词检索返回空 | **空 = 确实没有匹配**（失败会报错，见上一行）。先核对关键词与 `--mode keyword` 用法，不要因为怀疑索引坏了就去重建 |
 
 ## 命令类错误
 

@@ -8,7 +8,7 @@
 |------|------|
 | LanceDB 替代 SQLite | ANN 检索 vs 全表扫描，列式存储压缩率高，无锁并发 |
 | 通用文本表与 领域 图文表独立管理 | 向量空间不能混用；领域 的当前状态、后续升级目标与门禁见 [LOCAL-MODELS.md](C:/AI/memory/_canonical/LOCAL-MODELS.md) |
-| Table.optimize() 替代 compact_files() | 消除 deprecated warning，使用 LanceDB 推荐的新 API |
+| Table.optimize() 替代 compact_files() | 消除 deprecated warning，使用 LanceDB 推荐的新 API。**但它的 `cleanup_older_than` 默认是 None = 不回收旧版本**，必须显式传窗口 —— 2026-10-15 正是把「新 API 是超集」想当然，让碎片文件涨到 11.8 万个、目录 21 GB |
 | FTS 索引懒加载 | 首次 keyword_search 时自动创建，不需要手动建索引 |
 
 ## 检索策略
