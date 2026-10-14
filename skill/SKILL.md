@@ -44,13 +44,18 @@ description: |
 `<SKILL_ROOT>` 指本 SKILL.md 所在目录。PowerShell 使用绝对解释器和脚本路径，从任何工作目录调用：
 
 ```powershell
-$SkillRoot = 'C:\AI\skills\local-model' # 其他机器改为实际 Skill 目录
+# 把 <SKILL_ROOT> 换成本 SKILL.md 所在目录；在脚本/函数里可直接用 $PSScriptRoot，无需手改
+$SkillRoot = '<SKILL_ROOT>'
 $RagPython = Join-Path $SkillRoot '.venv\Scripts\python.exe'
 & $RagPython --version
 & $RagPython -B (Join-Path $SkillRoot 'scripts\cli.py') --help
 ```
 
-解释器启动失败时，先查 `.venv/pyvenv.cfg` 的基座是否存在及能否执行。不要仅因目录存在就宣称可用，也不要直接改 ACL 或重建环境。可选择已验证的本机 Python，并先核对 [requirements.txt](requirements.txt) 所需依赖；本机系统 Python 候选为 `C:\Program Files\Python313\python.exe`。瞬时失败写验收记录，不写成永久故障事实。
+端点与端口不写死：文本后端默认 `http://127.0.0.1:9123`，改 `registry.yaml` 的 `text_backend`／
+`vector_store.path`，或用环境变量 `LOCAL_RAG_BASE_URL`（检索）、`LOCAL_RAG_VLM_BASE_URL` +
+`LOCAL_RAG_VLM_MODEL`（图片理解）、`LOCAL_RAG_LLM_BASE` + `LOCAL_RAG_LLM_MODEL`（对话）覆盖。
+
+解释器启动失败时，先查 `.venv/pyvenv.cfg` 的基座是否存在及能否执行。不要仅因目录存在就宣称可用，也不要直接改 ACL 或重建环境。可选择已验证的本机 Python，并先核对 [requirements.txt](requirements.txt) 所需依赖；系统 Python 候选在 Windows 上形如 `C:\Program Files\Python3xx\python.exe`。瞬时失败写验收记录，不写成永久故障事实。
 
 首次安装使用 [setup.ps1](setup.ps1)：它会创建环境、安装依赖并运行 doctor，含真实模型调用与存储初始化；只查入口时不要运行安装脚本。
 
