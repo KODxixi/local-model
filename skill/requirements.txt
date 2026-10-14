@@ -3,6 +3,9 @@
 
 # 核心
 lancedb>=0.30.0
+pylance>=13.0.0  # LanceDB 的 compact_files/optimize 需要它；lancedb 未声明此依赖，
+                 # 缺失时 optimize 抛 ImportError —— 碎片压缩与旧版本回收会**全程静默失效**
+                 # （实测 2026-10-15：一张文本向量表因此积了 5.6 万个版本、目录膨胀到 20 GB）
 pyarrow>=14.0.0
 pandas>=2.0.0  # LanceDB to_pandas() 需要；lancedb 未声明此依赖，缺失会静默返回空结果
 PyYAML>=6.0

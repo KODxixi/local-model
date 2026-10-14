@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
@@ -153,26 +154,53 @@ def _sql_like_escape(value: str) -> str:
     return _escape_sql(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _compact_table(table: Any) -> None:
-    """压缩/优化 LanceDB 表碎片（best-effort，失败不抛）。
+# 旧版本保留窗口。**必须显式传给 optimize()** —— 见 ``_compact_table`` 的说明。
+VERSION_RETENTION = timedelta(days=7)
 
-    LanceDB >=0.21 用 ``Table.optimize()`` 替代已废弃的 ``compact_files()``
-    （compact + prune 旧版本 + 优化索引，是超集）。优先新 API；旧版本无
-    ``optimize()`` 时回退到 ``compact_files()``。任何失败都只记 stderr——
-    碎片压缩是性能优化，不影响正确性。
-    """
+
+def _cleanup_old_versions(table: Any) -> str:
+    """显式回收旧版本文件；返回一句可读结果（失败也返回文字，不抛）。"""
     try:
-        table.optimize()
+        return str(table.cleanup_old_versions(older_than=VERSION_RETENTION))
+    except Exception as exc:
+        return f"failed: {type(exc).__name__}: {exc}"
+
+
+def _compact_table(table: Any) -> dict[str, Any]:
+    """压缩碎片 + **回收旧版本文件**（best-effort，不抛；结果随返回值上报给上层）。
+
+    **2026-10-15 更正 —— 这里原先的判断是错的。** 原文写着 ``Table.optimize()``
+    「compact + prune 旧版本 + 优化索引，是超集」，于是只调 ``optimize()`` 就以为
+    旧版本会被回收。实测那一版的签名是
+    ``optimize(*, cleanup_older_than=None, ...)`` —— **默认 None 就是「不碰旧版本」**。
+    后果：那张表积了 **11.8 万个碎片文件**、目录膨胀到 **21 GB**（表里只有 22,050 行），
+    而且每跑一次索引都更长一点。现在显式传窗口，并保留 ``cleanup_old_versions`` 兜底。
+
+    失败不再只写 stderr：调用方会把结果带进索引报告，避免再次「静默膨胀」。
+    """
+    out: dict[str, Any] = {}
+    try:
+        out["optimize"] = str(table.optimize(cleanup_older_than=VERSION_RETENTION))
+    except TypeError:
+        # 老版本 lancedb 的 optimize() 没有 cleanup_older_than 参数：先优化，再显式回收
+        try:
+            out["optimize"] = str(table.optimize())
+        except Exception as exc:
+            out["optimize"] = f"failed: {type(exc).__name__}: {exc}"
+        out["cleanup"] = _cleanup_old_versions(table)
     except AttributeError:
-        # intentional: LanceDB <0.21 无 optimize()，回退到已废弃 compact_files
+        # intentional: LanceDB <0.21 无 optimize()，回退到已废弃 compact_files（它同样不清理旧版本）
         try:
             table.compact_files()
+            out["optimize"] = "compact_files"
         except Exception as exc:
-            print(f"[vector_store] compact_files 回退失败: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
+            out["optimize"] = f"failed: {type(exc).__name__}: {exc}"
+        out["cleanup"] = _cleanup_old_versions(table)
     except Exception as exc:
-        print(f"[vector_store] optimize 失败: {type(exc).__name__}: {exc}",
-              file=sys.stderr)
+        out["optimize"] = f"failed: {type(exc).__name__}: {exc}"
+    if "failed:" in str(out.get("optimize", "")):
+        print(f"[vector_store] optimize 失败: {out['optimize']}", file=sys.stderr)
+    return out
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -245,6 +273,9 @@ class LanceDBVectorStore:
         self._db = lancedb.connect(str(self.db_path))
         # P0-2: track whether ANN index has been built and row count at build
         # time so we only rebuild when rows have grown >50%.
+        # 建 ANN 索引失败时记录原因：检索会退化成暴力扫描（明显更慢），
+        # 但此前只写 stderr —— 用户/agent 无从知道"为什么变慢了"。2026-10-15 起经 stats() 可见。
+        self._index_error: str | None = None
         self._index_built = False
         self._index_rows_at_build = 0
         self._image_index_built = False
@@ -403,7 +434,13 @@ class LanceDBVectorStore:
         """删除不在 existing_paths 中的孤儿 chunks。
 
         Returns:
-            删除的孤儿文件数；失败返回 0（错误已记 stderr）。
+            删除的孤儿文件数。
+
+        Raises:
+            RuntimeError: 清理失败。**2026-10-15 起不再返回 0** —— 此前失败返回 0，与
+                「本来就没有孤儿」在报告里长得一模一样（都写 orphan_files_pruned: 0），
+                正是「把异常吞掉当成正常值」那一类；那种静默让索引目录膨胀到 20 GB 都
+                没人发现（见 ``_compact_table``）。现在抛错，由调用方在报告里明说。
         """
         # LanceDB 不支持 NOT IN 直接删除，需要先查询再删
         try:
@@ -413,9 +450,9 @@ class LanceDBVectorStore:
                 self._table.delete(f"path = '{_escape_sql(p)}'")
             return len(orphans)
         except Exception as exc:
-            print(f"[vector_store] delete_orphans 失败: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
-            return 0
+            raise RuntimeError(
+                f"delete_orphans 失败: {type(exc).__name__}: {exc}"
+            ) from exc
 
     # -----------------------------------------------------------------------
     # 搜索
@@ -552,9 +589,12 @@ class LanceDBVectorStore:
                 mask = mask & df["path"].str.contains(path_filter, regex=False, na=False)
             results = df[mask].head(top_k).to_dict("records")
         except Exception as exc:
-            print(f"[vector_store] keyword_search(LIKE) 失败: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
-            results = []
+            # **不再静默返回空**：空结果与「检索失败」必须能区分开。
+            # 2026-10-15：本文档自己在别处写着「对 agent 来说『成功但空』比『失败』更危险」，
+            # 这里此前正是反例 —— 失败会被当成「没有匹配」报给用户。
+            raise RuntimeError(
+                f"keyword_search(LIKE) 失败: {type(exc).__name__}: {exc}"
+            ) from exc
 
         output = []
         for r in results:
@@ -662,26 +702,33 @@ class LanceDBVectorStore:
             )
             self._index_built = True
             self._index_rows_at_build = total
+            self._index_error = None
         except Exception as exc:
+            self._index_error = f"{type(exc).__name__}: {exc}"
             print(
-                f"[vector_store] create_index 失败（表 kb_{self.kb_name}）: {exc}",
+                f"[vector_store] create_index 失败（表 kb_{self.kb_name}）: {exc}"
+                " —— 检索仍可用，但退化为暴力扫描（更慢）；用 stats 可查。",
                 file=sys.stderr,
             )
 
-        # 建完索引后合并碎片（新 API optimize 自动 compact + prune + 索引优化）。
+        # 建完索引后合并碎片并回收旧版本 —— 注意 optimize 的旧版本回收必须显式传窗口。
         _compact_table(self._table)
 
     def optimize(self) -> dict[str, Any]:
-        """优化表（碎片压缩 + 旧版本清理 + 索引优化，P0 升级至 ``Table.optimize``）。"""
+        """优化表：碎片压缩 + **旧版本回收** + 索引优化。
+
+        ``cleanup_older_than`` 必须显式传（默认 ``None`` = 不回收旧版本），见 ``_compact_table``。
+        结果随返回值上报，调用方可把它带进索引报告，避免再次静默膨胀。
+        """
         before = self.count()
-        try:
-            self._table.optimize()
-        except AttributeError:
-            # intentional: LanceDB <0.21 无 optimize()，回退到已废弃的 compact_files
-            self._table.compact_files()
-        except Exception as exc:
-            return {"optimized": False, "error": str(exc), "rows": before}
-        return {"optimized": True, "rows": self.count(), "before": before}
+        detail = _compact_table(self._table)
+        failed = "failed:" in str(detail.get("optimize", ""))
+        return {
+            "optimized": not failed,
+            "rows": self.count(),
+            "before": before,
+            "detail": detail,
+        }
 
     # -----------------------------------------------------------------------
     # 统计
@@ -699,6 +746,12 @@ class LanceDBVectorStore:
                 "dimensions": self.dimensions,
                 "model": self.model,
                 "db_path": str(self.db_path),
+                # ANN 索引状态：缺了它检索会明显变慢，必须可见（2026-10-15）
+                "ann_index": (
+                    {"built": self._index_built, "rows_at_build": self._index_rows_at_build}
+                    if self._index_error is None
+                    else {"built": False, "error": self._index_error}
+                ),
             }
         except Exception as exc:
             return {"kb": self.kb_name, "error": str(exc)}

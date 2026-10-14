@@ -461,8 +461,16 @@ class RAGIndexer:
         pruned: int,
         start_time: float,
         errors: list[dict[str, str]],
+        optimize: dict[str, Any] | None = None,
+        prune: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """组装索引返回字典（统一字段结构，正常路径与 skip 路径共用）。"""
+        """组装索引返回字典（统一字段结构，正常路径与 skip 路径共用）。
+
+        ``optimize`` / ``prune`` 是碎片压缩、旧版本回收与孤儿清理的结果。**必须上报**：
+        2026-10-15 实测：某张文本向量表因旧版本从不回收而膨胀到 20 GB，
+        而当时这条信息只写进 stderr、不进报告 —— 所以膨胀了很久没人看见。同理，
+        清理失败也不再以 ``0`` 的形式伪装成「没有孤儿」。
+        """
         return {
             "kb": self.kb.name,
             "root": self.kb.root,
@@ -475,6 +483,8 @@ class RAGIndexer:
             "orphan_files_pruned": pruned,
             "total_chunks_in_store": self.store.count(),
             "elapsed_seconds": round(time.time() - start_time, 2),
+            "optimize": optimize or {},
+            "prune": prune or {},
             "errors": errors,
         }
 
@@ -529,12 +539,22 @@ class RAGIndexer:
                     total_upserted += fr.get("chunks_upserted", 0)
                 except Exception as exc:
                     errors.append({"path": str(file_path), "error": str(exc)[:ERROR_MSG_TRUNCATE]})
-            pruned = self._prune_orphans({str(f) for f in self._scan_disk_files()}) if (prune and not force) else 0
+            prune_result: dict[str, Any] = {}
+            pruned = 0
+            if prune and not force:
+                try:
+                    pruned = self._prune_orphans({str(f) for f in self._scan_disk_files()})
+                    prune_result = {"pruned": pruned}
+                except Exception as exc:
+                    # 不再吞掉：清理失败必须与「没有孤儿」区分开（2026-10-15）
+                    prune_result = {"error": f"{type(exc).__name__}: {str(exc)[:ERROR_MSG_TRUNCATE]}"}
+                    print(f"[prune] 失败（不阻断索引）: {exc}", file=sys.stderr)
             try:
-                self.store.optimize()
+                optimize_result: dict[str, Any] = self.store.optimize()
             except Exception as exc:
+                optimize_result = {"optimized": False, "error": f"{type(exc).__name__}: {exc}"}
                 print(f"[optimize] 失败（不阻断索引）: {exc}", file=sys.stderr)
-            return self._build_result(discovered=discovered, skipped=skipped, indexed=len(files_result), failed=len(errors), chunks=total_upserted, entities=0, pruned=pruned, start_time=start_time, errors=errors[:MAX_REPORTED_ERRORS])
+            return self._build_result(discovered=discovered, skipped=skipped, indexed=len(files_result), failed=len(errors), chunks=total_upserted, entities=0, pruned=pruned, start_time=start_time, errors=errors[:MAX_REPORTED_ERRORS], optimize=optimize_result, prune=prune_result)
 
     def check_freshness(self) -> dict[str, Any]:
         """检查索引新鲜度：比较文件系统和索引中的 mtime。
